@@ -210,7 +210,7 @@ def parse_python_file(file_path: str) -> Dict[str, Any]:
             elif isinstance(node, ast.FunctionDef):
                 func_info = {
                     "name": node.name,
-                    "signature": ast.unparse(item.args), # type: ignore
+                    "signature": ast.unparse(node.args), # type: ignore
                     "docstring": ast.get_docstring(node),
                     "decorators": [ast.unparse(d) for d in node.decorator_list] # type: ignore
                 }

@@ -17,6 +17,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "toml",
     "langgraph==0.4.5",
     "langchain==0.3.25",
     "langchain-community==0.3.24",

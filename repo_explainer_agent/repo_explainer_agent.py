@@ -627,43 +627,115 @@ def summarize_component_from_metadata(file_path: str, metadata: Dict[str, Any]) 
     Returns:
         A dictionary containing the component's name, its generated summary,
         and the source file path, or None if no substantial metadata was found
-        for summarization.
+        for summarization (though efforts are made to avoid this for known types).
     """
     text_for_summary = ""
     component_name = Path(file_path).name
-    context_notes = [] # To guide the LLM
+    context_notes = []
+    file_ext = Path(file_path).suffix.lower()
+    prompt_task_description = f"Summarize role of component '{component_name}'"
+
+    # Known source code extensions for fallback message
+    KNOWN_SOURCE_EXTS_FOR_FALLBACK = [
+        ".py", ".js", ".java", ".ts", ".go", ".rb", ".php", ".cs",
+        ".cpp", ".c", ".h", ".scala", ".kt", ".swift"
+    ]
 
     if metadata.get("type") == "generic_preview": # From read_file_content
         text_for_summary = metadata.get("content", "")
-        context_notes.append(f"File: {file_path}. Content preview.")
-    elif metadata.get("file_path") and metadata.get("module_docstring"): # Python file
-        component_name = Path(metadata["file_path"]).name
-        text_for_summary += f"Module: {component_name}\nDocstring: {metadata['module_docstring']}\n"
+        context_notes.append(f"File: {component_name} (Generic Preview of content)")
+    elif file_ext == ".py":
         context_notes.append(f"Python module: {component_name}")
+        parts = []
+        if metadata.get("module_docstring"):
+            parts.append(f"Module Docstring: {metadata['module_docstring']}")
         if metadata.get("classes"):
-            for cls_data in metadata["classes"][:2]: # Limit classes for brevity
-                text_for_summary += f"Class: {cls_data['name']}\nDocstring: {cls_data.get('docstring','')}\n"
+            class_details_str = []
+            for cls_data in metadata["classes"][:2]: # Limit classes
+                cls_entry_parts = [f"Class: {cls_data['name']}"]
+                if cls_data.get('docstring'): cls_entry_parts.append(f"  Docstring: {cls_data.get('docstring','')}")
                 if cls_data.get("methods"):
-                     text_for_summary += f"Methods: {', '.join([m['name'] for m in cls_data['methods'][:3]])}\n" # Limit methods
+                    method_names = [m['name'] for m in cls_data['methods'][:3]]
+                    if method_names: cls_entry_parts.append(f"  Methods: {', '.join(method_names)}")
+                class_details_str.append("\n".join(cls_entry_parts))
+            if class_details_str: parts.append("Classes:\n" + "\n".join(class_details_str))
         if metadata.get("functions"):
-             text_for_summary += f"Functions: {', '.join([f['name'] for f in metadata['functions'][:3]])}\n" # Limit functions
-    elif metadata.get("file_path") and metadata.get("sections"): # Markdown file
-        component_name = Path(metadata["file_path"]).name
-        context_notes.append(f"Documentation file: {component_name}")
-        if metadata.get("title"): text_for_summary += f"Title: {metadata['title']}\n"
-        for section in metadata["sections"][:2]: # Limit sections
-            text_for_summary += f"Section: {section['heading']}\nPreview: {section['content_preview']}\n"
-    
+            function_details_str = []
+            for func_data in metadata["functions"][:3]: # Limit functions
+                func_entry_parts = [f"Function: {func_data['name']}"]
+                if func_data.get('docstring'): func_entry_parts.append(f"  Docstring: {func_data.get('docstring','')}")
+                if func_data.get('signature'): func_entry_parts.append(f"  Signature: {func_data.get('signature','')}")
+                function_details_str.append("\n".join(func_entry_parts))
+            if function_details_str: parts.append("Functions:\n" + "\n".join(function_details_str))
+        if metadata.get("imports"):
+            imports = metadata.get('imports', [])[:5]
+            if imports: parts.append(f"Key Imports: {', '.join(imports)}")
+        text_for_summary = "\n\n".join(filter(None, parts)).strip()
+        if not text_for_summary:
+            text_for_summary = f"Python file: {component_name}. (No detailed metadata like docstrings, classes, functions, or imports extracted. May be an empty script or primarily constants)."
+            context_notes.append("Minimal metadata extracted")
+
+    elif file_ext in [".md", ".rst", ".txt"] and metadata.get("sections"): # Markdown/Text file
+        context_notes.append(f"Documentation file: {component_name} (type: {file_ext})")
+        prompt_task_description = f"Summarize content of documentation file '{component_name}'"
+        parts = []
+        if metadata.get("title"):
+            parts.append(f"Title: {metadata['title']}")
+        section_details_str = []
+        for section in metadata["sections"][:3]: # Limit sections
+            sec_text = f"Section Heading: {section.get('heading', 'N/A')}\nContent Preview: {section.get('content_preview', '')}"
+            if section.get("code_blocks"):
+                sec_text += f"\n  Code blocks found: {len(section['code_blocks'])}"
+            section_details_str.append(sec_text)
+        if section_details_str:
+            parts.append("Key Sections:\n" + "\n---\n".join(section_details_str))
+        if metadata.get("links"):
+             links_preview = [f"[{l['text']}]({l['url']})" for l in metadata["links"][:3]]
+             if links_preview: parts.append(f"Key Links: {', '.join(links_preview)}")
+        text_for_summary = "\n\n".join(filter(None, parts)).strip()
+        if not text_for_summary:
+            text_for_summary = f"Documentation file: {component_name}. (No parsable title, sections, or links found)."
+            context_notes.append("Minimal metadata extracted")
+
+    # Fallback for other known source types or unhandled metadata
+    if not text_for_summary.strip() and file_ext in KNOWN_SOURCE_EXTS_FOR_FALLBACK:
+        if metadata.get("content"): # If a parser put raw content here
+            text_for_summary = str(metadata.get("content",""))[:FILE_PREVIEW_CHAR_LIMIT]
+            context_notes.append(f"File: {component_name} (type: {file_ext}, using raw content preview)")
+        else:
+            text_for_summary = f"File: {component_name} (type: {file_ext}). (No detailed summarizable content extracted by its parser, or parser not yet implemented/detailed for this type. May be an empty file or unrecognized structure)."
+        is_new_context = not any(component_name in note for note in context_notes)
+        if is_new_context: context_notes.append(f"File: {component_name} (type: {file_ext})")
+        if "Minimal metadata extracted" not in context_notes and "Generic Preview" not in context_notes[0]:
+            context_notes.append("Minimal or generic metadata")
+
     if not text_for_summary.strip():
-        # print(f"No substantial metadata to summarize for {file_path}")
         return None
 
-    # Truncate if too long before sending to LLM
     if len(text_for_summary) > LLM_SUMMARY_CHAR_LIMIT:
         text_for_summary = text_for_summary[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
-    
-    prompt = f"""You are an expert code repository analyst.
+
+    # Tailor prompt based on whether it's code or documentation
+    if "Documentation file" in context_notes[0]:
+        prompt = f"""You are an expert documentation analyst.
+The following text contains extracted metadata (like title, section headings, content previews, and links) from a documentation file named '{component_name}'.
+Context: {'; '.join(context_notes)}.
+Based on this information, provide a detailed (2-4 sentences) summary of this documentation file's main topics, purpose, and key information it conveys.
+Consider and include:
+- The primary subject matter or features it describes.
+- The intended audience or purpose of this document (e.g., tutorial, API reference, overview).
+- Any critical instructions, concepts, or examples highlighted.
+
+Extracted Metadata for {component_name}:
+---
+{text_for_summary}
+---
+
+Detailed Documentation Summary:"""
+    else: # Default prompt for code files or generic previews
+        prompt = f"""You are an expert code repository analyst.
 The following text contains extracted metadata (like docstrings, class/function names, content previews, or import statements) from a file named '{component_name}'.
+Context: {'; '.join(context_notes) if context_notes else 'General file analysis'}.
 Based on this information, provide a detailed (2-4 sentences) summary of this file's primary role, responsibilities, and functionality within the repository.
 Consider and include:
 - Its specific responsibilities or tasks it performs.
@@ -677,7 +749,8 @@ Extracted Metadata for {component_name}:
 ---
 
 Detailed Role/Functionality Summary:"""
-    summary = call_llm_api(prompt, f"Summarize role of component '{component_name}'")
+
+    summary = call_llm_api(prompt, prompt_task_description)
     return {"name": component_name, "summary": summary, "source_file": file_path}
 
 
@@ -712,33 +785,71 @@ def generate_final_report(state: AgentState) -> AgentState:
     """
     _add_status(state, "Generating final report...")
     
-    # Synthesize overall purpose if still basic
-    if state["repository_purpose_summary"] == "Not yet determined." and state["parsed_readme_data"]:
-        # Try to build a better one from all README content
+    # Step 1: Synthesize overall purpose from READMEs if still basic or to refine it
+    readme_derived_purpose = state["repository_purpose_summary"]
+    if state["parsed_readme_data"]:
         full_readme_text = ""
         for rd_data in state["parsed_readme_data"]:
-            if rd_data.get("title"): full_readme_text += rd_data["title"] + "\n"
-            for sec in rd_data.get("sections", []):
-                full_readme_text += sec.get("heading","") + "\n" + sec.get("content_preview","") + "\n\n"
+            if rd_data.get("title"): full_readme_text += f"Title: {rd_data['title']}\n"
+            for sec_idx, sec in enumerate(rd_data.get("sections", [])[:3]): # Limit sections for brevity
+                full_readme_text += f"Section {sec_idx+1}: {sec.get('heading','')}\nPreview: {sec.get('content_preview','')}\n\n"
+        
         if full_readme_text.strip():
             readme_content_for_llm = full_readme_text[:LLM_SUMMARY_CHAR_LIMIT]
-            prompt = f"""You are an expert code repository analyst.
+            prompt_readme_summary = f"""You are an expert code repository analyst.
 The following text is a compilation of content from one or more README files in a repository.
-Please synthesize a comprehensive (3-5 sentences) overall summary of the repository.
-Based on this combined information, detail:
+Please synthesize a comprehensive (3-4 sentences) overall summary of the repository's purpose as described by its documentation.
+Focus on:
 - The primary problem domain the repository addresses.
 - The core solution or functionality it offers.
-- Key features, capabilities, or modules highlighted.
+- Key features or capabilities highlighted in the documentation.
 - The intended audience or typical use cases, if mentioned.
-- Any insights into its development status, maturity, or unique aspects if evident from the text.
 
 Combined README Content:
 ---
 {readme_content_for_llm}
 ---
 
-Comprehensive Overall Repository Summary:"""
-            state["repository_purpose_summary"] = call_llm_api(prompt, "Synthesize overall repository purpose from combined READMEs")
+Repository Purpose Summary (from READMEs):"""
+            readme_derived_purpose = call_llm_api(prompt_readme_summary, "Refine repository purpose from combined READMEs")
+            _add_status(state, f"README-derived purpose: {readme_derived_purpose}")
+
+
+    # Step 2: Refine repository purpose using key component summaries
+    final_purpose_summary = readme_derived_purpose
+    if state["key_components_summary"]:
+        components_text_parts = []
+        for comp in state["key_components_summary"][:5]: # Limit components for brevity in prompt
+            components_text_parts.append(f"Component: {comp['name']} (Source: {comp['source_file']})\nSummary: {comp['summary']}")
+        
+        components_overview_for_llm = "\n\n".join(components_text_parts)
+        if len(components_overview_for_llm) > LLM_SUMMARY_CHAR_LIMIT:
+             components_overview_for_llm = components_overview_for_llm[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
+
+        if components_overview_for_llm.strip():
+            prompt_final_summary = f"""You are an expert code repository analyst.
+You have two pieces of information about a repository:
+1. A summary of its purpose derived from its README file(s).
+2. Summaries of its key code/documentation components.
+
+README-derived Purpose:
+---
+{readme_derived_purpose}
+---
+
+Key Component Summaries:
+---
+{components_overview_for_llm}
+---
+
+Based on BOTH the README-derived purpose AND the summaries of key components, synthesize a final, more holistic and accurate (3-5 sentences) summary of the repository's overall purpose and function.
+Ensure your final summary reflects insights from both the documentation and the actual components. For example, if components suggest a specific technology or a more nuanced function not obvious from the README alone, incorporate that.
+
+Final Holistic Repository Purpose Summary:"""
+            final_purpose_summary = call_llm_api(prompt_final_summary, "Synthesize final repository purpose from READMEs and Key Components")
+            _add_status(state, f"Final purpose (READMEs + Components): {final_purpose_summary}")
+
+    state["repository_purpose_summary"] = final_purpose_summary
 
     report = {
         "repository_url_or_path": state["repo_url_or_path"],
