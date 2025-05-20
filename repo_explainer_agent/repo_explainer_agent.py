@@ -50,6 +50,7 @@ class AgentState(TypedDict):
     # Extracted Data
     parsed_readme_data: List[Dict[str, Any]] # Data from parse_markdown_file
     parsed_config_data: List[Dict[str, Any]] # Data from parse_generic_config_file or specific ones
+    license_files_info: List[Dict[str, str]] # e.g., [{"file_path": "LICENSE", "license_name": "MIT"}]
     extracted_metadata: Dict[str, Dict[str, Any]] # file_path -> parsed_data (e.g., from parse_python_file)
     extracted_dependencies: Dict[str, List[str]] # e.g. {"main": [...], "dev": [...]}
     
@@ -166,6 +167,46 @@ def _add_status(state: AgentState, message: str) -> None:
     state["status_messages"].append(message)
     print(f"STATUS: {message}")
 
+def _extract_license_name_from_file(full_file_path: str, lines_to_check: int = 20) -> Optional[str]:
+    """
+    Tries to extract a common license name from the first few lines of a file.
+    """
+    try:
+        with open(full_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content_head = "".join(f.readline() for _ in range(lines_to_check))
+
+        # Common license patterns (can be expanded)
+        # Order matters if one is a substring of another (e.g. GPLv2 vs GPL)
+        license_regexes = {
+            "Apache-2.0": r"Apache License, Version 2\.0",
+            "MIT": r"MIT License",
+            "GPL-3.0": r"GNU General Public License version 3",
+            "GPL-2.0": r"GNU General Public License version 2",
+            "AGPL-3.0": r"GNU Affero General Public License version 3",
+            "LGPL-3.0": r"GNU Lesser General Public License version 3",
+            "BSD-3-Clause": r"BSD 3-Clause License",
+            "BSD-2-Clause": r"BSD 2-Clause License",
+            "Mozilla Public License 2.0": r"Mozilla Public License Version 2\.0",
+            "Creative Commons Zero v1.0 Universal": r"Creative Commons Zero v1\.0 Universal",
+            "Unlicense": r"The Unlicense",
+        }
+
+        for name, pattern in license_regexes.items():
+            if re.search(pattern, content_head, re.IGNORECASE):
+                return name
+        
+        # Fallback: check for SPDX License Identifier on its own line
+        # Example: SPDX-License-Identifier: MIT
+        spdx_match = re.search(r"SPDX-License-Identifier:\s*([A-Za-z0-9.\-]+)", content_head, re.IGNORECASE)
+        if spdx_match:
+            return spdx_match.group(1)
+
+    except Exception: # pylint: disable=broad-except
+        # Log this error appropriately if a logging mechanism exists
+        # print(f"Error reading or parsing license file {full_file_path}: {e}")
+        return "Error reading file" # Indicate read error
+    return "Unknown" # No common license name found, but file exists
+
 # --- Graph Node Implementations ---
 
 def initialize_repository_scan(state: AgentState) -> AgentState:
@@ -191,6 +232,7 @@ def initialize_repository_scan(state: AgentState) -> AgentState:
     _add_status(state, "Initializing repository scan...")
     state["parsed_readme_data"] = []
     state["parsed_config_data"] = []
+    state["license_files_info"] = []
     state["extracted_metadata"] = {}
     state["extracted_dependencies"] = {"main": [], "dev": [], "others": []}
     state["key_components_summary"] = []
@@ -234,11 +276,12 @@ def initialize_repository_scan(state: AgentState) -> AgentState:
     state["source_code_files"] = []
     
     # Common file patterns
-    readme_patterns = [r"readme(\.(md|rst|txt))?$", r"notice(\.(md|rst|txt))?$", r"license(\.(md|rst|txt))?$"]
+    readme_patterns = [r"readme(\.(md|rst|txt))?$", r"notice(\.(md|rst|txt))?$"] # Excludes license
+    license_patterns = [r"license(\.(md|rst|txt))?$", r"copying(\.(md|rst|txt))?$"] # Common license file names
     config_patterns = [
         r"docker-compose\.yml$", r"dockerfile$", r"\.env(\.example)?$", r"Makefile$",
         r"Procfile$", r"manifest\.json$", r"^\.?config(\.(json|yaml|yml|toml|ini|xml))?$" # General config.*
-    ] 
+    ]
     # More specific config files that might also be dependency files
     # These are handled by identify_dependencies_from_file but good to list them
     dependency_config_patterns = [
@@ -258,13 +301,20 @@ def initialize_repository_scan(state: AgentState) -> AgentState:
             file_lower = file.lower()
             file_ext = Path(file).suffix.lower()
 
+            # Check for license first, as it's more specific
+            matched_license = any(re.search(p, file_lower, re.IGNORECASE) for p in license_patterns)
             matched_readme = any(re.search(p, file_lower, re.IGNORECASE) for p in readme_patterns)
             matched_config = any(re.search(p, file_lower, re.IGNORECASE) for p in config_patterns)
             matched_dep_conf = any(re.search(p, file_lower, re.IGNORECASE) for p in dependency_config_patterns)
 
-            if matched_readme:
+            if matched_license:
+                license_name = _extract_license_name_from_file(_get_file_path(state, file_path_rel))
+                state["license_files_info"].append({"file_path": file_path_rel, "license_name": license_name or "Unknown"})
+            elif matched_readme: # Only if not a license
                 state["readme_files"].append(file_path_rel)
-            elif matched_dep_conf: # Prioritize as dependency file
+            
+            # Dependency and config file logic (can overlap with licenses if names are generic, but license check is first)
+            if matched_dep_conf: # Prioritize as dependency file
                 state["dependency_files"].append(file_path_rel)
                 if file_ext in [".toml", ".json", ".xml", ".yml", ".yaml", ".ini"]: # Some dep files are also general configs
                     state["config_files"].append(file_path_rel)
@@ -281,6 +331,7 @@ def initialize_repository_scan(state: AgentState) -> AgentState:
     state["source_code_files"] = sorted(list(set(state["source_code_files"])))
     
     _add_status(state, f"Identified READMEs: {len(state['readme_files'])}")
+    _add_status(state, f"Identified Licenses: {len(state['license_files_info'])}")
     _add_status(state, f"Identified Configs: {len(state['config_files'])}")
     _add_status(state, f"Identified Dependency Files: {len(state['dependency_files'])}")
     _add_status(state, f"Identified Source Code Files: {len(state['source_code_files'])}")
@@ -694,9 +745,11 @@ Comprehensive Overall Repository Summary:"""
         "repository_purpose": state["repository_purpose_summary"],
         "key_components": state["key_components_summary"],
         "dependencies": state["extracted_dependencies"],
+        "licenses_identified": state.get("license_files_info", []),
         "directory_tree_snippet": state.get("directory_tree", [])[:20] + ["... (and more)"] if state.get("directory_tree") and len(state.get("directory_tree",[])) > 20 else state.get("directory_tree", []),
         "processed_files_count": {
             "readmes": len(state["readme_files"]),
+            "licenses": len(state.get("license_files_info", [])),
             "configs": len(state["config_files"]),
             "dependency_files": len(state["dependency_files"]),
             "source_code_metadata_extracted": len(state["processed_metadata_files"]),
