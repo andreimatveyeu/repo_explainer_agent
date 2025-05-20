@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "A simple AI agent analyzing the contents of a (Git) repository. "
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+  { name="Andrei Matveyeu", email="andrei@ideabulbs.com" },
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache License 2.0",
