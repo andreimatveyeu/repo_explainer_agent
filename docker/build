@@ -1,0 +1,3 @@
+#!/bin/sh
+
+docker build --network=host -t repo-explainer-agent -f docker/Dockerfile .

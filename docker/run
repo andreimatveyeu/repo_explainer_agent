@@ -1,0 +1,15 @@
+#!/bin/sh
+
+REPO_URL=$1
+
+if [ -z "$REPO_URL" ]; then
+  echo "Usage: $0 <git_repo_url>"
+  exit 1
+fi
+
+docker run --rm --network=host \
+  -e REPO_URL="$REPO_URL" \
+  -e GOOGLE_AISTUDIO_API_KEY \
+  -e OLLAMA_URL \
+  -e OLLAMA_MODEL \
+  repo-explainer-agent $REPO_URL

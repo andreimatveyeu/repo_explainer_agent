@@ -7,7 +7,7 @@ from typing import TypedDict, List, Dict, Any, Optional, Literal
 import requests # For calling local Ollama
 import google.generativeai as genai # For calling Google Gemini
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.sqlite import SqliteSaver # For persistence if needed
+#from langgraph.checkpoint.sqlite import SqliteSaver # For persistence if needed
 
 # Import tools from the sibling tools.py file
 from . import tools
@@ -115,14 +115,7 @@ def call_llm_api(prompt: str, task_description: str, use_local: bool = False) ->
     if google_api_key:
         try:
             genai.configure(api_key=google_api_key)
-            # As per task: "gemini-2.5-flash-preview-04-17"
-            # Note: This model name seems unusual. Common names are like "gemini-1.5-flash-latest"
-            # or "models/gemini-1.5-flash-preview-0514". Using the exact string from the task.
-            # If this specific model name `gemini-2.5-flash-preview-04-17` is not found by the API,
-            # it might be better to use a more standard one like `models/gemini-1.5-flash-latest`
-            # or `models/gemini-1.5-flash-preview-0514`.
-            # For now, adhering strictly to the task's model name.
-            model_name = "gemini-1.5-flash-preview-0514" # Corrected based on re-reading the task.
+            model_name = "gemini-2.5-flash-preview-04-17"
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
@@ -192,9 +185,10 @@ def initialize_repository_scan(state: AgentState) -> AgentState:
     Returns:
         The updated agent state.
     """
-    _add_status(state, "Initializing repository scan...")
+    # Initialize error_messages and status_messages first
     state["error_messages"] = []
     state["status_messages"] = []
+    _add_status(state, "Initializing repository scan...")
     state["parsed_readme_data"] = []
     state["parsed_config_data"] = []
     state["extracted_metadata"] = {}
@@ -783,7 +777,7 @@ def build_graph():
         "select_batch_for_metadata_extraction",
         # Based on the return value of select_batch_for_metadata_extraction (which sets files_to_parse_queue)
         # we decide if we go to extract_metadata_from_batch or generate_final_report
-        lambda state: "extract_metadata_from_batch" if state["files_to_parse_queue"] else "generate_final_report",
+        lambda state: "extract_metadata_from_batch" if state.get("files_to_parse_queue") else "generate_final_report",
         {
             "extract_metadata_from_batch": "extract_metadata_from_batch",
             "generate_final_report": "generate_final_report"

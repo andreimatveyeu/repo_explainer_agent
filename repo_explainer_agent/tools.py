@@ -52,8 +52,8 @@ def get_directory_tree(repo_path: str, ignore_patterns: Optional[List[str]] = No
     """
     if ignore_patterns is None:
         ignore_patterns = [
-            ".git", "__pycache__", "node_modules", "target", "build",
-            ".DS_Store", "*.pyc", "*.swp", ".idea", ".vscode"
+            r"^\.git$", r"^__pycache__$", r"^node_modules$", r"^target$", r"^build$",
+            r"^\.DS_Store$", r"^.*\.pyc$", r"^.*\.swp$", r"^\.idea$", r"^\.vscode$"
         ]
 
     tree_lines = []

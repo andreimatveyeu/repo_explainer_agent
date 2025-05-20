@@ -16,12 +16,14 @@ classifiers = [
     "License :: OSI Approved :: Apache License 2.0",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+    "langgraph==0.4.5",
+    "langchain==0.3.25",
+    "langchain-community==0.3.24",
+    "google-generativeai",
+    "GitPython",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/andreimatveyeu/repo_explainer_agent"
 "Bug Tracker" = "https://github.com/andreimatveyeu/repo_explainer_agent/issues"
-
-[project.dependencies]
-langgraph = "^0.4.5"
-langchain = "^0.3.25"
-langchain-community = "^0.3.24"
