@@ -601,9 +601,9 @@ def extract_metadata_from_batch(state: AgentState) -> AgentState:
             else:
                 state["extracted_metadata"][file_rel_path] = parsed_data
                 # Summarize this component based on its metadata
-                component_summary = summarize_component_from_metadata(file_rel_path, parsed_data)
-                if component_summary:
-                    state["key_components_summary"].append(component_summary)
+                component_summaries = summarize_component_from_metadata(file_rel_path, parsed_data)
+                if component_summaries:
+                    state["key_components_summary"].extend(component_summaries)
         
         state["processed_metadata_files"].append(file_rel_path)
         state["processed_files_this_iteration"].append(file_rel_path)
@@ -612,13 +612,14 @@ def extract_metadata_from_batch(state: AgentState) -> AgentState:
     # No explicit next stage here, will be decided by conditional edge
     return state
 
-def summarize_component_from_metadata(file_path: str, metadata: Dict[str, Any]) -> Optional[Dict[str, str]]:
+def summarize_component_from_metadata(file_path: str, metadata: Dict[str, Any]) -> List[Dict[str, str]]:
     """
-    Generates a summary for a single component (file) based on its extracted metadata.
+    Generates summaries for a component (file) and its key internal elements (e.g., classes)
+    based on extracted metadata.
 
-    This function takes the file path and its parsed metadata (e.g., docstrings,
-    class/function names for source code; sections for markdown) and constructs
-    a prompt for an LLM to summarize the component's role and functionality.
+    This function takes the file path and its parsed metadata. It first summarizes the file
+    itself. Then, for specific file types like Python, it iterates through extracted classes,
+    generating a separate summary for each.
 
     Args:
         file_path: The relative path of the file in the repository.
@@ -626,161 +627,169 @@ def summarize_component_from_metadata(file_path: str, metadata: Dict[str, Any]) 
                   The structure depends on the file type (e.g., Python, Markdown).
 
     Returns:
-        A dictionary containing the component's name, its generated summary,
-        and the source file path, or None if no substantial metadata was found
-        for summarization (though efforts are made to avoid this for known types).
+        A list of dictionaries, where each dictionary represents a summarized component
+        (either the file itself or an internal element like a class). Each dictionary
+        contains 'name', 'summary', 'source_file', and 'component_type'.
+        Returns an empty list if the file is skipped or no summarizable content is found.
     """
-    text_for_summary = ""
+    components_to_return: List[Dict[str, str]] = []
     component_name = Path(file_path).name
-    context_notes = []
     file_ext = Path(file_path).suffix.lower()
-    prompt_task_description = f"Summarize role of component '{component_name}'"
-
-    # Known source code extensions for fallback message
+    
+    # Known source code extensions for fallback message (used for file-level summary)
     KNOWN_SOURCE_EXTS_FOR_FALLBACK = [
         ".py", ".js", ".java", ".ts", ".go", ".rb", ".php", ".cs",
         ".cpp", ".c", ".h", ".scala", ".kt", ".swift"
     ]
 
-    if metadata.get("type") == "generic_preview": # From read_file_content
-        text_for_summary = metadata.get("content", "")
-        context_notes.append(f"File: {component_name} (Generic Preview of content)")
+    # --- Handle minimal __init__.py files ---
+    if component_name == "__init__.py":
+        has_no_classes = not bool(metadata.get("classes"))
+        has_no_functions = not bool(metadata.get("functions"))
+        module_docstring_content = metadata.get("module_docstring", "").strip()
+        docstring_is_minimal = len(module_docstring_content) < 50
+        imports_list = metadata.get("imports", [])
+        imports_are_minimal = len(imports_list) < 2
+        is_truly_minimal_init = (
+            has_no_classes and has_no_functions and
+            docstring_is_minimal and imports_are_minimal
+        )
+        if is_truly_minimal_init:
+            return [] # Skip summarizing minimal __init__.py
+
+    # --- Construct text_for_summary and context_notes for the FILE ---
+    text_for_summary_file = ""
+    context_notes_file = []
+    prompt_task_description_file = f"Summarize role of file '{component_name}'"
+
+    if metadata.get("type") == "generic_preview":
+        text_for_summary_file = metadata.get("content", "")
+        context_notes_file.append(f"File: {component_name} (Generic Preview of content)")
     elif file_ext == ".py":
-        context_notes.append(f"Python module: {component_name}")
-
-        # --- REVISED __init__.py CHECK ---
-        if component_name == "__init__.py":
-            has_no_classes = not bool(metadata.get("classes"))
-            has_no_functions = not bool(metadata.get("functions"))
-            
-            module_docstring_content = metadata.get("module_docstring", "").strip()
-            docstring_is_minimal = len(module_docstring_content) < 50 # Threshold for minimal docstring
-            
-            imports_list = metadata.get("imports", [])
-            imports_are_minimal = len(imports_list) < 2 # Threshold for minimal imports (0 or 1)
-
-            is_truly_minimal_init = (
-                has_no_classes and
-                has_no_functions and
-                docstring_is_minimal and
-                imports_are_minimal
-            )
-
-            if is_truly_minimal_init:
-                # _add_status(None, f"Skipping minimal __init__.py: {file_path}") # Requires state access or different logging
-                # print(f"DEBUG: Skipping summary for truly minimal __init__.py: {file_path}")
-                return None # Skip this file from being summarized
-        # --- END REVISED __init__.py CHECK ---
-
-        # Proceed with constructing text_for_summary if not a skipped minimal __init__.py
+        context_notes_file.append(f"Python module: {component_name}")
         parts = []
-        if metadata.get("module_docstring"):
-            parts.append(f"Module Docstring: {metadata['module_docstring']}")
-        if metadata.get("classes"):
-            class_details_str = []
-            for cls_data in metadata["classes"][:2]: # Limit classes
-                cls_entry_parts = [f"Class: {cls_data['name']}"]
-                if cls_data.get('docstring'): cls_entry_parts.append(f"  Docstring: {cls_data.get('docstring','')}")
-                if cls_data.get("methods"):
-                    method_names = [m['name'] for m in cls_data['methods'][:3]]
-                    if method_names: cls_entry_parts.append(f"  Methods: {', '.join(method_names)}")
-                class_details_str.append("\n".join(cls_entry_parts))
-            if class_details_str: parts.append("Classes:\n" + "\n".join(class_details_str))
-        if metadata.get("functions"):
-            function_details_str = []
-            for func_data in metadata["functions"][:3]: # Limit functions
-                func_entry_parts = [f"Function: {func_data['name']}"]
-                if func_data.get('docstring'): func_entry_parts.append(f"  Docstring: {func_data.get('docstring','')}")
-                if func_data.get('signature'): func_entry_parts.append(f"  Signature: {func_data.get('signature','')}")
-                function_details_str.append("\n".join(func_entry_parts))
-            if function_details_str: parts.append("Functions:\n" + "\n".join(function_details_str))
-        if metadata.get("imports"):
-            imports = metadata.get('imports', [])[:5] # Keep original limit for non-minimal files
-            if imports: parts.append(f"Key Imports: {', '.join(imports)}")
-        
-        text_for_summary = "\n\n".join(filter(None, parts)).strip()
-        
-        if not text_for_summary: # Fallback if parts list is empty (e.g., for non-__init__.py files that are empty)
-            text_for_summary = f"Python file: {component_name}. (No detailed metadata like docstrings, classes, functions, or imports extracted. May be an empty script or primarily constants)."
-            context_notes.append("Minimal metadata extracted")
-
-    elif file_ext in [".md", ".rst", ".txt"] and metadata.get("sections"): # Markdown/Text file
-        context_notes.append(f"Documentation file: {component_name} (type: {file_ext})")
-        prompt_task_description = f"Summarize content of documentation file '{component_name}'"
+        if metadata.get("module_docstring"): parts.append(f"Module Docstring: {metadata['module_docstring']}")
+        # For file summary, give a hint of classes/functions, but summarize them separately
+        if metadata.get("classes"): parts.append(f"Contains classes: {', '.join([c['name'] for c in metadata['classes'][:3]])}...")
+        if metadata.get("functions"): parts.append(f"Contains functions: {', '.join([f['name'] for f in metadata['functions'][:3]])}...")
+        if metadata.get("imports"): parts.append(f"Key Imports: {', '.join(metadata.get('imports', [])[:5])}")
+        text_for_summary_file = "\n\n".join(filter(None, parts)).strip()
+        if not text_for_summary_file:
+            text_for_summary_file = f"Python file: {component_name}. (No detailed metadata like docstrings or top-level structures extracted for overall file summary)."
+            context_notes_file.append("Minimal file-level metadata")
+    elif file_ext in [".md", ".rst", ".txt"] and metadata.get("sections"):
+        context_notes_file.append(f"Documentation file: {component_name} (type: {file_ext})")
+        prompt_task_description_file = f"Summarize content of documentation file '{component_name}'"
         parts = []
-        if metadata.get("title"):
-            parts.append(f"Title: {metadata['title']}")
+        if metadata.get("title"): parts.append(f"Title: {metadata['title']}")
+        # ... (rest of markdown/text processing from original, simplified for brevity here)
         section_details_str = []
         for section in metadata["sections"][:3]: # Limit sections
             sec_text = f"Section Heading: {section.get('heading', 'N/A')}\nContent Preview: {section.get('content_preview', '')}"
-            if section.get("code_blocks"):
-                sec_text += f"\n  Code blocks found: {len(section['code_blocks'])}"
+            if section.get("code_blocks"): sec_text += f"\n  Code blocks found: {len(section['code_blocks'])}"
             section_details_str.append(sec_text)
-        if section_details_str:
-            parts.append("Key Sections:\n" + "\n---\n".join(section_details_str))
-        if metadata.get("links"):
-             links_preview = [f"[{l['text']}]({l['url']})" for l in metadata["links"][:3]]
-             if links_preview: parts.append(f"Key Links: {', '.join(links_preview)}")
-        text_for_summary = "\n\n".join(filter(None, parts)).strip()
-        if not text_for_summary:
-            text_for_summary = f"Documentation file: {component_name}. (No parsable title, sections, or links found)."
-            context_notes.append("Minimal metadata extracted")
-
-    # Fallback for other known source types or unhandled metadata
-    if not text_for_summary.strip() and file_ext in KNOWN_SOURCE_EXTS_FOR_FALLBACK:
-        if metadata.get("content"): # If a parser put raw content here
-            text_for_summary = str(metadata.get("content",""))[:FILE_PREVIEW_CHAR_LIMIT]
-            context_notes.append(f"File: {component_name} (type: {file_ext}, using raw content preview)")
+        if section_details_str: parts.append("Key Sections:\n" + "\n---\n".join(section_details_str))
+        text_for_summary_file = "\n\n".join(filter(None, parts)).strip()
+        if not text_for_summary_file:
+            text_for_summary_file = f"Documentation file: {component_name}. (No parsable title or sections found)."
+            context_notes_file.append("Minimal metadata extracted")
+    
+    # Fallback for other known source types or unhandled metadata for the FILE
+    if not text_for_summary_file.strip() and file_ext in KNOWN_SOURCE_EXTS_FOR_FALLBACK:
+        if metadata.get("content"):
+            text_for_summary_file = str(metadata.get("content",""))[:FILE_PREVIEW_CHAR_LIMIT]
+            context_notes_file.append(f"File: {component_name} (type: {file_ext}, using raw content preview)")
         else:
-            text_for_summary = f"File: {component_name} (type: {file_ext}). (No detailed summarizable content extracted by its parser, or parser not yet implemented/detailed for this type. May be an empty file or unrecognized structure)."
-        is_new_context = not any(component_name in note for note in context_notes)
-        if is_new_context: context_notes.append(f"File: {component_name} (type: {file_ext})")
-        if "Minimal metadata extracted" not in context_notes and "Generic Preview" not in context_notes[0]:
-            context_notes.append("Minimal or generic metadata")
+            text_for_summary_file = f"File: {component_name} (type: {file_ext}). (No detailed summarizable content extracted by its parser for overall file summary)."
+        if not any(component_name in note for note in context_notes_file): context_notes_file.append(f"File: {component_name} (type: {file_ext})")
+        if "Minimal metadata" not in ' '.join(context_notes_file) and "Generic Preview" not in context_notes_file[0]:
+             context_notes_file.append("Minimal or generic metadata for file")
 
-    if not text_for_summary.strip():
-        return None
+    if not text_for_summary_file.strip():
+        return [] # No summarizable content for the file itself
 
-    if len(text_for_summary) > LLM_SUMMARY_CHAR_LIMIT:
-        text_for_summary = text_for_summary[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
+    if len(text_for_summary_file) > LLM_SUMMARY_CHAR_LIMIT:
+        text_for_summary_file = text_for_summary_file[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
 
-    # Tailor prompt based on whether it's code or documentation
-    if "Documentation file" in context_notes[0]:
-        prompt = f"""You are an expert documentation analyst.
-The following text contains extracted metadata (like title, section headings, content previews, and links) from a documentation file named '{component_name}'.
-Context: {'; '.join(context_notes)}.
+    # --- Generate summary for the FILE ---
+    prompt_file_template = ""
+    if "Documentation file" in (context_notes_file[0] if context_notes_file else ""):
+        prompt_file_template = f"""You are an expert documentation analyst.
+The following text contains extracted metadata from a documentation file named '{component_name}'.
+Context: {'; '.join(context_notes_file)}.
 Based on this information, provide a detailed (2-4 sentences) summary of this documentation file's main topics, purpose, and key information it conveys.
-Consider and include:
-- The primary subject matter or features it describes.
-- The intended audience or purpose of this document (e.g., tutorial, API reference, overview).
-- Any critical instructions, concepts, or examples highlighted.
-
 Extracted Metadata for {component_name}:
 ---
-{text_for_summary}
+{text_for_summary_file}
 ---
-
 Detailed Documentation Summary:"""
-    else: # Default prompt for code files or generic previews
-        prompt = f"""You are an expert code repository analyst.
-The following text contains extracted metadata (like docstrings, class/function names, content previews, or import statements) from a file named '{component_name}'.
-Context: {'; '.join(context_notes) if context_notes else 'General file analysis'}.
+    else:
+        prompt_file_template = f"""You are an expert code repository analyst.
+The following text contains extracted metadata from a file named '{component_name}'.
+Context: {'; '.join(context_notes_file) if context_notes_file else 'General file analysis'}.
 Based on this information, provide a detailed (2-4 sentences) summary of this file's primary role, responsibilities, and functionality within the repository.
-Consider and include:
-- Its specific responsibilities or tasks it performs.
-- Key inputs it might process and outputs it might produce (if discernible).
-- How it might interact with other components or parts of a larger system.
-- Any specific algorithms, data structures, design patterns, or notable technologies used or implied by the metadata.
-
 Extracted Metadata for {component_name}:
 ---
-{text_for_summary}
+{text_for_summary_file}
 ---
-
 Detailed Role/Functionality Summary:"""
+    
+    file_summary_text = call_llm_api(prompt_file_template, prompt_task_description_file)
+    components_to_return.append({
+        "name": component_name,
+        "summary": file_summary_text,
+        "source_file": file_path,
+        "component_type": "file"
+    })
 
-    summary = call_llm_api(prompt, prompt_task_description)
-    return {"name": component_name, "summary": summary, "source_file": file_path}
+    # --- Process and summarize CLASSES within the file (e.g., for Python) ---
+    if file_ext == ".py" and metadata.get("classes"):
+        for cls_data in metadata.get("classes", []):
+            class_name = cls_data.get('name')
+            if not class_name:
+                continue
+
+            class_docstring = cls_data.get('docstring', '')
+            methods_details_parts = []
+            for m_idx, method_data in enumerate(cls_data.get("methods", [])[:3]): # Limit methods
+                method_sig = method_data.get('signature', method_data.get('name', ''))
+                # Optionally add method docstring if concise:
+                # if method_data.get('docstring'): method_sig += f" (Docs: {method_data['docstring'][:30]}...)"
+                methods_details_parts.append(f"- {method_sig}")
+            methods_str = "\n".join(methods_details_parts) if methods_details_parts else "N/A"
+
+            class_info_for_llm = f"Class Name: {class_name}\n"
+            if class_docstring: class_info_for_llm += f"Docstring: {class_docstring}\n"
+            if methods_details_parts: class_info_for_llm += f"Methods (first few):\n{methods_str}\n"
+            
+            class_info_for_llm = class_info_for_llm.strip()
+            if len(class_info_for_llm) > LLM_SUMMARY_CHAR_LIMIT:
+                 class_info_for_llm = class_info_for_llm[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
+            
+            if not class_info_for_llm: # Should not happen if class_name exists
+                continue
+
+            class_prompt = f"""You are an expert code repository analyst.
+You are analyzing a class named '{class_name}' within the file '{file_path}'.
+Class Information:
+---
+{class_info_for_llm}
+---
+Based on this information, provide a concise (1-3 sentences) summary of this class's primary role and responsibility.
+Focus on what this class *does* or *represents*.
+
+Class Role/Responsibility Summary:"""
+            
+            class_summary_text = call_llm_api(class_prompt, f"Summarize class {class_name} from {file_path}")
+            
+            components_to_return.append({
+                "name": class_name,
+                "summary": class_summary_text,
+                "source_file": file_path,
+                "component_type": "class"
+            })
+            
+    return components_to_return
 
 
 def _add_warning(state: AgentState, message: str) -> None:
