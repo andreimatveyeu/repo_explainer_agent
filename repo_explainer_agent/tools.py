@@ -141,16 +141,14 @@ def search_in_file(file_path: str, patterns: List[str]) -> Dict[str, List[Dict[s
 
 def parse_python_file(file_path: str) -> Dict[str, Any]:
     """
-    Parses a Python file to extract module docstring, classes (name, docstring, methods),
-    and functions (name, signature, docstring).
+    Parses a Python file to extract module docstring, imports, and definitions
+    (classes and functions) with their docstrings and line/column information.
     Does NOT include full method/function bodies.
     """
     result: Dict[str, Any] = {
-        "file_path": file_path,
         "module_docstring": None,
-        "classes": [],
-        "functions": [],
         "imports": [],
+        "definitions": [],
         "error": None
     }
     try:
@@ -160,61 +158,52 @@ def parse_python_file(file_path: str) -> Dict[str, Any]:
 
         result["module_docstring"] = ast.get_docstring(tree)
 
-        for node in tree.body:
-            if isinstance(node, ast.Import):
-                result["imports"].extend([alias.name for alias in node.names])
-            elif isinstance(node, ast.ImportFrom):
-                if node.module: # Can be None for relative imports like 'from . import foo'
-                    result["imports"].append(node.module + "." + ", ".join([alias.name for alias in node.names]))
-                else: # Relative import
-                     result["imports"].append("." * node.level + ", ".join([alias.name for alias in node.names]))
-
-
-            elif isinstance(node, ast.ClassDef):
-                class_info: Dict[str, Any] = {
-                    "name": node.name,
-                    "docstring": ast.get_docstring(node),
-                    "methods": [],
-                    "attributes": [] # Basic instance attributes from __init__
+        for node in tree.body: # Iterate over top-level nodes in the AST body
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                import_info: Dict[str, Any] = {
+                    "name": ast.unparse(node).strip(),
+                    "lineno": node.lineno,
+                    "col_offset": node.col_offset,
+                    "end_lineno": node.end_lineno,
+                    "end_col_offset": node.end_col_offset,
                 }
-                for item in node.body:
+                result["imports"].append(import_info)
+            elif isinstance(node, ast.FunctionDef): # Top-level function
+                definition_info: Dict[str, Any] = {
+                    "name": node.name,
+                    "type": "function",
+                    "docstring": ast.get_docstring(node),
+                    "lineno": node.lineno,
+                    "col_offset": node.col_offset,
+                    "end_lineno": node.end_lineno,
+                    "end_col_offset": node.end_col_offset,
+                }
+                result["definitions"].append(definition_info)
+            elif isinstance(node, ast.ClassDef):
+                class_definition_info: Dict[str, Any] = {
+                    "name": node.name,
+                    "type": "class",
+                    "docstring": ast.get_docstring(node),
+                    "lineno": node.lineno,
+                    "col_offset": node.col_offset,
+                    "end_lineno": node.end_lineno,
+                    "end_col_offset": node.end_col_offset,
+                    "methods": []
+                }
+                for item in node.body: # Iterate over items in class body for methods
                     if isinstance(item, ast.FunctionDef): # Method
                         method_info = {
                             "name": item.name,
-                            "signature": ast.unparse(item.args), # type: ignore
+                            "type": "method",
                             "docstring": ast.get_docstring(item),
-                            "decorators": [ast.unparse(d) for d in item.decorator_list] # type: ignore
+                            "lineno": item.lineno,
+                            "col_offset": item.col_offset,
+                            "end_lineno": item.end_lineno,
+                            "end_col_offset": item.end_col_offset,
                         }
-                        class_info["methods"].append(method_info)
-                        # Look for self.attr = ... in __init__
-                        if item.name == "__init__":
-                            for stmt in item.body:
-                                if isinstance(stmt, ast.Assign):
-                                    for target in stmt.targets:
-                                        if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == 'self':
-                                            class_info["attributes"].append(target.attr)
-                    elif isinstance(item, ast.AnnAssign) or isinstance(item, ast.Assign): # Class variables
-                        # This can be complex; for now, just grab names if simple
-                        targets = []
-                        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
-                            targets.append(item.target.id)
-                        elif isinstance(item, ast.Assign):
-                            for target_node in item.targets:
-                                if isinstance(target_node, ast.Name):
-                                    targets.append(target_node.id)
-                        if targets:
-                             class_info["attributes"].extend(targets)
+                        class_definition_info["methods"].append(method_info)
+                result["definitions"].append(class_definition_info)
 
-
-                result["classes"].append(class_info)
-            elif isinstance(node, ast.FunctionDef):
-                func_info = {
-                    "name": node.name,
-                    "signature": ast.unparse(node.args), # type: ignore
-                    "docstring": ast.get_docstring(node),
-                    "decorators": [ast.unparse(d) for d in node.decorator_list] # type: ignore
-                }
-                result["functions"].append(func_info)
     except FileNotFoundError:
         result["error"] = "File not found."
     except SyntaxError as e:

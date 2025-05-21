@@ -7,6 +7,15 @@ if [ -z "$REPO_URL" ]; then
   exit 1
 fi
 
+if [ "$1" = "--tests" ]; then
+  echo "Running tests..."
+  docker run --rm --network=host \
+    -v "$(pwd):/app" \
+    --entrypoint "" \
+    repo-explainer-agent python -m unittest tests/test_tools.py
+  exit 0
+fi
+
 docker run --rm --network=host \
   -e REPO_URL="$REPO_URL" \
   -e GOOGLE_AISTUDIO_API_KEY \

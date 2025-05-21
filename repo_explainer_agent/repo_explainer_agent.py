@@ -13,7 +13,8 @@ from langgraph.graph import StateGraph, END
 from . import tools
 
 # --- Configuration ---
-TEMP_REPO_DIR = "temp_cloned_repo"
+import tempfile
+TEMP_REPO_DIR = tempfile.mkdtemp()
 MAX_FILES_TO_PROCESS_PER_BATCH = 10 # For iterative processing
 MAX_ITERATIONS_METADATA_EXTRACTION = 5 # Safety break for loops
 LLM_SUMMARY_CHAR_LIMIT = 2000 # Max chars to send to mock LLM for one item
@@ -994,7 +995,7 @@ if __name__ == "__main__":
     # Clean up cloned repo if it was cloned
     if not args.is_local and os.path.exists(TEMP_REPO_DIR):
         print(f"\nCleaning up temporary directory: {TEMP_REPO_DIR}")
-        # shutil.rmtree(TEMP_REPO_DIR) # Uncomment to automatically clean up
-        print(f"Cleanup skipped for inspection. Manually remove: {TEMP_REPO_DIR}")
+        shutil.rmtree(TEMP_REPO_DIR) # Uncomment to automatically clean up
+        print(f"Cleaned up temporary directory: {TEMP_REPO_DIR}")
 
     print("\nAgent finished.")
