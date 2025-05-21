@@ -647,6 +647,32 @@ def summarize_component_from_metadata(file_path: str, metadata: Dict[str, Any]) 
         context_notes.append(f"File: {component_name} (Generic Preview of content)")
     elif file_ext == ".py":
         context_notes.append(f"Python module: {component_name}")
+
+        # --- REVISED __init__.py CHECK ---
+        if component_name == "__init__.py":
+            has_no_classes = not bool(metadata.get("classes"))
+            has_no_functions = not bool(metadata.get("functions"))
+            
+            module_docstring_content = metadata.get("module_docstring", "").strip()
+            docstring_is_minimal = len(module_docstring_content) < 50 # Threshold for minimal docstring
+            
+            imports_list = metadata.get("imports", [])
+            imports_are_minimal = len(imports_list) < 2 # Threshold for minimal imports (0 or 1)
+
+            is_truly_minimal_init = (
+                has_no_classes and
+                has_no_functions and
+                docstring_is_minimal and
+                imports_are_minimal
+            )
+
+            if is_truly_minimal_init:
+                # _add_status(None, f"Skipping minimal __init__.py: {file_path}") # Requires state access or different logging
+                # print(f"DEBUG: Skipping summary for truly minimal __init__.py: {file_path}")
+                return None # Skip this file from being summarized
+        # --- END REVISED __init__.py CHECK ---
+
+        # Proceed with constructing text_for_summary if not a skipped minimal __init__.py
         parts = []
         if metadata.get("module_docstring"):
             parts.append(f"Module Docstring: {metadata['module_docstring']}")
@@ -669,10 +695,12 @@ def summarize_component_from_metadata(file_path: str, metadata: Dict[str, Any]) 
                 function_details_str.append("\n".join(func_entry_parts))
             if function_details_str: parts.append("Functions:\n" + "\n".join(function_details_str))
         if metadata.get("imports"):
-            imports = metadata.get('imports', [])[:5]
+            imports = metadata.get('imports', [])[:5] # Keep original limit for non-minimal files
             if imports: parts.append(f"Key Imports: {', '.join(imports)}")
+        
         text_for_summary = "\n\n".join(filter(None, parts)).strip()
-        if not text_for_summary:
+        
+        if not text_for_summary: # Fallback if parts list is empty (e.g., for non-__init__.py files that are empty)
             text_for_summary = f"Python file: {component_name}. (No detailed metadata like docstrings, classes, functions, or imports extracted. May be an empty script or primarily constants)."
             context_notes.append("Minimal metadata extracted")
 
