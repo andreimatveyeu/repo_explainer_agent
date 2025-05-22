@@ -16,7 +16,7 @@ if [ "$1" = "--tests" ]; then
   exit 0
 fi
 
-docker run --rm --network=host \
+docker run -it --rm --network=host \
   -e REPO_URL="$REPO_URL" \
   -e GOOGLE_AISTUDIO_API_KEY \
   -e OLLAMA_URL \

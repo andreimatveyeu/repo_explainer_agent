@@ -614,107 +614,148 @@ def extract_metadata_from_batch(state: AgentState) -> AgentState:
 
 def summarize_component_from_metadata(file_path: str, metadata: Dict[str, Any]) -> List[Dict[str, str]]:
     """
-    Generates summaries for a component (file) and its key internal elements (e.g., classes)
-    based on extracted metadata.
-
-    This function takes the file path and its parsed metadata. It first summarizes the file
-    itself. Then, for specific file types like Python, it iterates through extracted classes,
-    generating a separate summary for each.
+    Generates summaries for components.
+    For Python files, it summarizes classes, methods, and functions.
+    For other file types, it summarizes the file itself.
 
     Args:
         file_path: The relative path of the file in the repository.
         metadata: A dictionary containing parsed information from the file.
-                  The structure depends on the file type (e.g., Python, Markdown).
+                  The structure depends on the file type.
 
     Returns:
-        A list of dictionaries, where each dictionary represents a summarized component
-        (either the file itself or an internal element like a class). Each dictionary
-        contains 'name', 'summary', 'source_file', and 'component_type'.
+        A list of dictionaries, where each dictionary represents a summarized component.
+        Each dictionary contains 'name', 'summary', 'source_file', and 'component_type'.
         Returns an empty list if the file is skipped or no summarizable content is found.
     """
     components_to_return: List[Dict[str, str]] = []
-    component_name = Path(file_path).name
+    component_name = Path(file_path).name # This is file name
     file_ext = Path(file_path).suffix.lower()
-    
-    # Known source code extensions for fallback message (used for file-level summary)
-    KNOWN_SOURCE_EXTS_FOR_FALLBACK = [
-        ".py", ".js", ".java", ".ts", ".go", ".rb", ".php", ".cs",
-        ".cpp", ".c", ".h", ".scala", ".kt", ".swift"
-    ]
 
     # --- Handle minimal __init__.py files ---
-    if component_name == "__init__.py":
-        has_no_classes = not bool(metadata.get("classes"))
-        has_no_functions = not bool(metadata.get("functions"))
-        module_docstring_content = metadata.get("module_docstring", "").strip()
+    if component_name == "__init__.py" and file_ext == ".py":
+        definitions = metadata.get("definitions", [])
+        module_docstring_content = metadata.get("module_docstring") or ""
+        module_docstring_content = module_docstring_content.strip()
         docstring_is_minimal = len(module_docstring_content) < 50
-        imports_list = metadata.get("imports", [])
-        imports_are_minimal = len(imports_list) < 2
-        is_truly_minimal_init = (
-            has_no_classes and has_no_functions and
-            docstring_is_minimal and imports_are_minimal
+        # imports_list = metadata.get("imports", []) # 'imports' is still a top-level key
+        # imports_are_minimal = len(imports_list) < 2 # This check can be kept or removed
+
+        is_truly_minimal_init_py = (
+            not definitions and # No classes or functions defined in the file
+            docstring_is_minimal
+            # and imports_are_minimal # Optional: consider imports for minimality
         )
-        if is_truly_minimal_init:
+        if is_truly_minimal_init_py:
             return [] # Skip summarizing minimal __init__.py
 
-    # --- Construct text_for_summary and context_notes for the FILE ---
-    text_for_summary_file = ""
-    context_notes_file = []
-    prompt_task_description_file = f"Summarize role of file '{component_name}'"
+    if file_ext == ".py":
+        # For Python files, process definitions (classes, functions, methods)
+        # Do NOT add a file-level summary for the .py file itself.
+        definitions = metadata.get("definitions", [])
+        # module_docstring = metadata.get("module_docstring") # Available if needed for module-level summary
 
-    if metadata.get("type") == "generic_preview":
-        text_for_summary_file = metadata.get("content", "")
-        context_notes_file.append(f"File: {component_name} (Generic Preview of content)")
-    elif file_ext == ".py":
-        context_notes_file.append(f"Python module: {component_name}")
-        parts = []
-        if metadata.get("module_docstring"): parts.append(f"Module Docstring: {metadata['module_docstring']}")
-        # For file summary, give a hint of classes/functions, but summarize them separately
-        if metadata.get("classes"): parts.append(f"Contains classes: {', '.join([c['name'] for c in metadata['classes'][:3]])}...")
-        if metadata.get("functions"): parts.append(f"Contains functions: {', '.join([f['name'] for f in metadata['functions'][:3]])}...")
-        if metadata.get("imports"): parts.append(f"Key Imports: {', '.join(metadata.get('imports', [])[:5])}")
-        text_for_summary_file = "\n\n".join(filter(None, parts)).strip()
-        if not text_for_summary_file:
-            text_for_summary_file = f"Python file: {component_name}. (No detailed metadata like docstrings or top-level structures extracted for overall file summary)."
-            context_notes_file.append("Minimal file-level metadata")
-    elif file_ext in [".md", ".rst", ".txt"] and metadata.get("sections"):
-        context_notes_file.append(f"Documentation file: {component_name} (type: {file_ext})")
-        prompt_task_description_file = f"Summarize content of documentation file '{component_name}'"
-        parts = []
-        if metadata.get("title"): parts.append(f"Title: {metadata['title']}")
-        # ... (rest of markdown/text processing from original, simplified for brevity here)
-        section_details_str = []
-        for section in metadata["sections"][:3]: # Limit sections
-            sec_text = f"Section Heading: {section.get('heading', 'N/A')}\nContent Preview: {section.get('content_preview', '')}"
-            if section.get("code_blocks"): sec_text += f"\n  Code blocks found: {len(section['code_blocks'])}"
-            section_details_str.append(sec_text)
-        if section_details_str: parts.append("Key Sections:\n" + "\n---\n".join(section_details_str))
-        text_for_summary_file = "\n\n".join(filter(None, parts)).strip()
-        if not text_for_summary_file:
-            text_for_summary_file = f"Documentation file: {component_name}. (No parsable title or sections found)."
-            context_notes_file.append("Minimal metadata extracted")
-    
-    # Fallback for other known source types or unhandled metadata for the FILE
-    if not text_for_summary_file.strip() and file_ext in KNOWN_SOURCE_EXTS_FOR_FALLBACK:
-        if metadata.get("content"):
-            text_for_summary_file = str(metadata.get("content",""))[:FILE_PREVIEW_CHAR_LIMIT]
-            context_notes_file.append(f"File: {component_name} (type: {file_ext}, using raw content preview)")
-        else:
-            text_for_summary_file = f"File: {component_name} (type: {file_ext}). (No detailed summarizable content extracted by its parser for overall file summary)."
-        if not any(component_name in note for note in context_notes_file): context_notes_file.append(f"File: {component_name} (type: {file_ext})")
-        if "Minimal metadata" not in ' '.join(context_notes_file) and "Generic Preview" not in context_notes_file[0]:
-             context_notes_file.append("Minimal or generic metadata for file")
+        for def_data in definitions:
+            item_type = def_data.get("type")
+            item_name = def_data.get("name")
+            item_docstring = def_data.get("docstring", "No docstring.")
+            
+            if item_type == "class":
+                class_name_for_methods = item_name # Save for qualifying method names
+                methods_summary_parts = []
+                for method_data in def_data.get("methods", []):
+                    method_name = method_data.get("name", "unknown_method")
+                    # tools.parse_python_file doesn't provide full signature, just name.
+                    methods_summary_parts.append(method_name + "()") # Simple representation
+                
+                methods_list_str = f"Methods: {', '.join(methods_summary_parts)}" if methods_summary_parts else "Methods: None listed."
+                class_summary_text = f"Docstring: {item_docstring}\n{methods_list_str}"
+                
+                components_to_return.append({
+                    "name": item_name,
+                    "summary": class_summary_text.strip(),
+                    "source_file": file_path,
+                    "component_type": "class"
+                })
 
-    if not text_for_summary_file.strip():
-        return [] # No summarizable content for the file itself
+                # Add methods of the class as separate components
+                for method_data in def_data.get("methods", []):
+                    method_name = method_data.get("name")
+                    if not method_name: continue # Should not happen if class had method
+                    method_docstring = method_data.get("docstring", "No docstring.")
+                    method_summary_text = f"Docstring: {method_docstring}" # Signature placeholder: method_name()
+                    components_to_return.append({
+                        "name": f"{class_name_for_methods}.{method_name}", # Qualified name
+                        "summary": method_summary_text.strip(),
+                        "source_file": file_path,
+                        "component_type": "method"
+                    })
 
-    if len(text_for_summary_file) > LLM_SUMMARY_CHAR_LIMIT:
-        text_for_summary_file = text_for_summary_file[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
+            elif item_type == "function":
+                func_signature_text = f"{item_name}()" # Simple representation from name
+                function_summary_text = f"Signature: {func_signature_text}\nDocstring: {item_docstring}"
+                
+                components_to_return.append({
+                    "name": item_name,
+                    "summary": function_summary_text.strip(),
+                    "source_file": file_path,
+                    "component_type": "function"
+                })
+        
+    else: # For non-Python files, keep the original file-level summarization logic
+        text_for_summary_file = ""
+        context_notes_file = []
+        prompt_task_description_file = f"Summarize role of file '{component_name}'"
+        # Known source code extensions for fallback message (used for file-level summary)
+        KNOWN_SOURCE_EXTS_FOR_FALLBACK = [
+            # ".py" is handled above, so it's implicitly excluded from this list's usage here
+            ".js", ".java", ".ts", ".go", ".rb", ".php", ".cs",
+            ".cpp", ".c", ".h", ".scala", ".kt", ".swift"
+        ]
 
-    # --- Generate summary for the FILE ---
-    prompt_file_template = ""
-    if "Documentation file" in (context_notes_file[0] if context_notes_file else ""):
-        prompt_file_template = f"""You are an expert documentation analyst.
+        if metadata.get("type") == "generic_preview":
+            text_for_summary_file = metadata.get("content", "")
+            context_notes_file.append(f"File: {component_name} (Generic Preview of content)")
+        elif file_ext in [".md", ".rst", ".txt"] and metadata.get("sections"):
+            context_notes_file.append(f"Documentation file: {component_name} (type: {file_ext})")
+            prompt_task_description_file = f"Summarize content of documentation file '{component_name}'"
+            parts = []
+            if metadata.get("title"): parts.append(f"Title: {metadata['title']}")
+            section_details_str = []
+            for section in metadata.get("sections", [])[:3]: # Limit sections
+                sec_text = f"Section Heading: {section.get('heading', 'N/A')}\nContent Preview: {section.get('content_preview', '')}"
+                if section.get("code_blocks"): sec_text += f"\n  Code blocks found: {len(section['code_blocks'])}"
+                section_details_str.append(sec_text)
+            if section_details_str: parts.append("Key Sections:\n" + "\n---\n".join(section_details_str))
+            text_for_summary_file = "\n\n".join(filter(None, parts)).strip()
+            if not text_for_summary_file:
+                text_for_summary_file = f"Documentation file: {component_name}. (No parsable title or sections found)."
+                context_notes_file.append("Minimal metadata extracted")
+        
+        # Fallback for other known source types (excluding .py) or unhandled metadata for the FILE
+        if not text_for_summary_file.strip() and file_ext in KNOWN_SOURCE_EXTS_FOR_FALLBACK: # .py already excluded by logic flow
+            if metadata.get("content"):
+                text_for_summary_file = str(metadata.get("content",""))[:FILE_PREVIEW_CHAR_LIMIT]
+                context_notes_file.append(f"File: {component_name} (type: {file_ext}, using raw content preview)")
+            else:
+                text_for_summary_file = f"File: {component_name} (type: {file_ext}). (No detailed summarizable content extracted by its parser for overall file summary)."
+            if not any(component_name in note for note in context_notes_file): context_notes_file.append(f"File: {component_name} (type: {file_ext})")
+            if "Minimal metadata" not in ' '.join(context_notes_file) and "Generic Preview" not in context_notes_file[0]:
+                 context_notes_file.append("Minimal or generic metadata for file")
+
+        if not text_for_summary_file.strip():
+            # If, for a non-Python file, we still have no summary text, it means it's not markdown, 
+            # not a generic preview we could read, and not another known source type we have content for.
+            # In this case, we return an empty list, as no meaningful component can be generated.
+            return [] 
+
+        if len(text_for_summary_file) > LLM_SUMMARY_CHAR_LIMIT:
+            text_for_summary_file = text_for_summary_file[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
+
+        # --- Generate summary for the FILE (non-Python files) ---
+        prompt_file_template = ""
+        if "Documentation file" in (context_notes_file[0] if context_notes_file else ""):
+            prompt_file_template = f"""You are an expert documentation analyst.
 The following text contains extracted metadata from a documentation file named '{component_name}'.
 Context: {'; '.join(context_notes_file)}.
 Based on this information, provide a detailed (2-4 sentences) summary of this documentation file's main topics, purpose, and key information it conveys.
@@ -723,8 +764,8 @@ Extracted Metadata for {component_name}:
 {text_for_summary_file}
 ---
 Detailed Documentation Summary:"""
-    else:
-        prompt_file_template = f"""You are an expert code repository analyst.
+        else: # General file (non-Python, non-documentation with specific handling)
+            prompt_file_template = f"""You are an expert code repository analyst.
 The following text contains extracted metadata from a file named '{component_name}'.
 Context: {'; '.join(context_notes_file) if context_notes_file else 'General file analysis'}.
 Based on this information, provide a detailed (2-4 sentences) summary of this file's primary role, responsibilities, and functionality within the repository.
@@ -733,78 +774,14 @@ Extracted Metadata for {component_name}:
 {text_for_summary_file}
 ---
 Detailed Role/Functionality Summary:"""
-    
-    file_summary_text = call_llm_api(prompt_file_template, prompt_task_description_file)
-    components_to_return.append({
-        "name": component_name,
-        "summary": file_summary_text,
-        "source_file": file_path,
-        "component_type": "file"
-    })
-
-    # --- Process and summarize CLASSES within the file (e.g., for Python) ---
-    if file_ext == ".py" and metadata.get("classes"):
-        for cls_data in metadata.get("classes", []):
-            class_name = cls_data.get('name')
-            if not class_name:
-                continue
-
-            class_docstring = cls_data.get('docstring', '')
-            methods_details_parts = []
-            for m_idx, method_data in enumerate(cls_data.get("methods", [])[:3]): # Limit methods
-                method_sig = method_data.get('signature', method_data.get('name', ''))
-                # Optionally add method docstring if concise:
-                # if method_data.get('docstring'): method_sig += f" (Docs: {method_data['docstring'][:30]}...)"
-                methods_details_parts.append(f"- {method_sig}")
-            methods_str = "\n".join(methods_details_parts) if methods_details_parts else "N/A"
-
-            class_info_for_llm = f"Class Name: {class_name}\n"
-            if class_docstring: class_info_for_llm += f"Docstring: {class_docstring}\n"
-            if methods_details_parts: class_info_for_llm += f"Methods (first few):\n{methods_str}\n"
-            
-            class_info_for_llm = class_info_for_llm.strip()
-            if len(class_info_for_llm) > LLM_SUMMARY_CHAR_LIMIT:
-                 class_info_for_llm = class_info_for_llm[:LLM_SUMMARY_CHAR_LIMIT-3] + "..."
-            
-            if not class_info_for_llm: # Should not happen if class_name exists
-                continue
-
-            # Replace LLM call for class summary with direct data
-            cls_docstring = cls_data.get('docstring', 'No docstring.')
-            methods_summary_parts = []
-            for method_data in cls_data.get("methods", []):
-                method_sig = method_data.get('signature', method_data.get('name', 'unknown_method'))
-                methods_summary_parts.append(method_sig)
-            
-            methods_list_str = f"Methods: {', '.join(methods_summary_parts)}" if methods_summary_parts else "Methods: None listed."
-            class_summary_text = f"Docstring: {cls_docstring}\n{methods_list_str}"
-            
-            components_to_return.append({
-                "name": class_name,
-                "summary": class_summary_text.strip(),
-                "source_file": file_path,
-                "component_type": "class"
-            })
-
-    # --- Process and list FUNCTIONS within the file (e.g., for Python) ---
-    if file_ext == ".py" and metadata.get("functions"):
-        for func_data in metadata.get("functions", []):
-            func_name = func_data.get('name')
-            if not func_name:
-                continue
-
-            func_docstring = func_data.get('docstring', 'No docstring.')
-            # Assuming 'signature' is available in func_data from parse_python_file
-            func_signature = func_data.get('signature', func_name) 
-
-            function_summary_text = f"Signature: {func_signature}\nDocstring: {func_docstring}"
-            
-            components_to_return.append({
-                "name": func_name,
-                "summary": function_summary_text.strip(),
-                "source_file": file_path,
-                "component_type": "function" 
-            })
+        
+        file_summary_text = call_llm_api(prompt_file_template, prompt_task_description_file)
+        components_to_return.append({
+            "name": component_name,
+            "summary": file_summary_text,
+            "source_file": file_path,
+            "component_type": "file" # This is a non-Python file
+        })
             
     return components_to_return
 
@@ -910,10 +887,84 @@ Final Holistic Repository Purpose Summary:"""
 
     state["repository_purpose_summary"] = final_purpose_summary
 
+    # --- Enrich components with importance and sort them ---
+    enriched_components = []
+    if state["key_components_summary"] and state["repository_purpose_summary"]:
+        _add_status(state, f"Assessing importance for {len(state['key_components_summary'])} key components...")
+        for comp in state["key_components_summary"]:
+            comp_details_text = f"- Name: {comp.get('name', 'N/A')}\n" \
+                                f"- Type: {comp.get('component_type', 'N/A')}\n" \
+                                f"- Source File: {comp.get('source_file', 'N/A')}\n" \
+                                f"- Summary: {comp.get('summary', 'N/A')}"
+
+            prompt_importance = f"""You are an expert code repository analyst. You are assessing the importance of a specific component within a larger repository.
+
+Repository's Overall Purpose:
+---
+{state["repository_purpose_summary"]}
+---
+
+Component Details:
+---
+{comp_details_text}
+---
+
+Task:
+1. Assess the importance of this component to the overall repository. Consider its role, type, and how it contributes to the repository's purpose.
+2. Provide an importance rating on a scale of 1 (least important) to 5 (most important).
+3. Provide a concise explanation (1-2 sentences) for this importance rating.
+
+Output Format (Strictly follow this format):
+Importance: [1-5]
+Explanation: [Your 1-2 sentence explanation]"""
+
+            importance_response = call_llm_api(prompt_importance, f"Assess importance for {comp.get('name', 'component')}")
+            
+            importance_score = 0 # Default score
+            importance_explanation = "Could not determine importance." # Default explanation
+
+            try:
+                lines = importance_response.strip().split('\n')
+                if len(lines) >= 2:
+                    importance_line = lines[0].lower()
+                    explanation_line = lines[1]
+                    if importance_line.startswith("importance:"):
+                        importance_score = int(importance_line.replace("importance:", "").strip())
+                    if explanation_line.lower().startswith("explanation:"):
+                        importance_explanation = explanation_line.replace("Explanation:", "").replace("explanation:", "").strip()
+                    elif not explanation_line.lower().startswith("importance:"): # If first line was not importance, maybe second is explanation without prefix
+                        importance_explanation = explanation_line.strip()
+
+
+                # Fallback if parsing was incomplete but some text exists
+                if importance_score == 0 and "Explanation:" in importance_response: # Try to get explanation if score failed
+                    parts = importance_response.split("Explanation:", 1)
+                    if len(parts) > 1: importance_explanation = parts[1].strip().split('\n')[0]
+
+            except ValueError:
+                _add_warning(state, f"Could not parse importance score for component {comp.get('name', 'N/A')}. Received: {lines[0] if lines else 'empty response'}")
+            except Exception as e: # pylint: disable=broad-except
+                _add_warning(state, f"Error parsing importance response for {comp.get('name', 'N/A')}: {e}. Response: {importance_response}")
+
+            enriched_comp = {
+                **comp,
+                "importance_score": importance_score,
+                "importance_explanation": importance_explanation
+            }
+            enriched_components.append(enriched_comp)
+        
+        # Sort components by importance_score (descending)
+        enriched_components.sort(key=lambda x: x.get("importance_score", 0), reverse=True)
+        _add_status(state, "Finished assessing and sorting component importance.")
+    else:
+        # If no components or no purpose summary, use original components without enrichment
+        enriched_components = state["key_components_summary"]
+
+
     report = {
         "repository_url_or_path": state["repo_url_or_path"],
         "repository_purpose": state["repository_purpose_summary"],
-        "key_components": state["key_components_summary"],
+        "key_components": enriched_components,
         "dependencies": state["extracted_dependencies"],
         "licenses_identified": state.get("license_files_info", []),
         "directory_tree_snippet": state.get("directory_tree", [])[:20] + ["... (and more)"] if state.get("directory_tree") and len(state.get("directory_tree",[])) > 20 else state.get("directory_tree", []),
