@@ -769,24 +769,41 @@ Detailed Role/Functionality Summary:"""
             if not class_info_for_llm: # Should not happen if class_name exists
                 continue
 
-            class_prompt = f"""You are an expert code repository analyst.
-You are analyzing a class named '{class_name}' within the file '{file_path}'.
-Class Information:
----
-{class_info_for_llm}
----
-Based on this information, provide a concise (1-3 sentences) summary of this class's primary role and responsibility.
-Focus on what this class *does* or *represents*.
-
-Class Role/Responsibility Summary:"""
+            # Replace LLM call for class summary with direct data
+            cls_docstring = cls_data.get('docstring', 'No docstring.')
+            methods_summary_parts = []
+            for method_data in cls_data.get("methods", []):
+                method_sig = method_data.get('signature', method_data.get('name', 'unknown_method'))
+                methods_summary_parts.append(method_sig)
             
-            class_summary_text = call_llm_api(class_prompt, f"Summarize class {class_name} from {file_path}")
+            methods_list_str = f"Methods: {', '.join(methods_summary_parts)}" if methods_summary_parts else "Methods: None listed."
+            class_summary_text = f"Docstring: {cls_docstring}\n{methods_list_str}"
             
             components_to_return.append({
                 "name": class_name,
-                "summary": class_summary_text,
+                "summary": class_summary_text.strip(),
                 "source_file": file_path,
                 "component_type": "class"
+            })
+
+    # --- Process and list FUNCTIONS within the file (e.g., for Python) ---
+    if file_ext == ".py" and metadata.get("functions"):
+        for func_data in metadata.get("functions", []):
+            func_name = func_data.get('name')
+            if not func_name:
+                continue
+
+            func_docstring = func_data.get('docstring', 'No docstring.')
+            # Assuming 'signature' is available in func_data from parse_python_file
+            func_signature = func_data.get('signature', func_name) 
+
+            function_summary_text = f"Signature: {func_signature}\nDocstring: {func_docstring}"
+            
+            components_to_return.append({
+                "name": func_name,
+                "summary": function_summary_text.strip(),
+                "source_file": file_path,
+                "component_type": "function" 
             })
             
     return components_to_return
@@ -858,7 +875,11 @@ Repository Purpose Summary (from READMEs):"""
     if state["key_components_summary"]:
         components_text_parts = []
         for comp in state["key_components_summary"][:5]: # Limit components for brevity in prompt
-            components_text_parts.append(f"Component: {comp['name']} (Source: {comp['source_file']})\nSummary: {comp['summary']}")
+            summary_content = comp['summary']
+            # Truncate summary for classes/functions if it's too long for this specific LLM prompt
+            if comp.get('component_type') in ['class', 'function']:
+                summary_content = (summary_content[:250] + '...') if len(summary_content) > 250 else summary_content
+            components_text_parts.append(f"Component: {comp['name']} (Source: {comp['source_file']})\nSummary: {summary_content}")
         
         components_overview_for_llm = "\n\n".join(components_text_parts)
         if len(components_overview_for_llm) > LLM_SUMMARY_CHAR_LIMIT:
