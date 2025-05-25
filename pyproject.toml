@@ -25,6 +25,15 @@ dependencies = [
     "GitPython",
 ]
 
+[tool.setuptools]
+package-dir = {"repo_explainer_agent" = "src"}
+# This maps the package named 'repo_explainer_agent' to the 'src' directory.
+# Setuptools will then look for an __init__.py in 'src' (which we created)
+# and include modules like 'graph.py' and subpackages like 'core', 'nodes', 'utils'
+# as part of the 'repo_explainer_agent' package.
+packages = ["repo_explainer_agent"]
+
+
 [project.urls]
 "Homepage" = "https://github.com/andreimatveyeu/repo_explainer_agent"
 "Bug Tracker" = "https://github.com/andreimatveyeu/repo_explainer_agent/issues"

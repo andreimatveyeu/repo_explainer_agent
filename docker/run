@@ -21,4 +21,4 @@ docker run -it --rm --network=host \
   -e GOOGLE_AISTUDIO_API_KEY \
   -e OLLAMA_URL \
   -e OLLAMA_MODEL \
-  repo-explainer-agent $REPO_URL
+  repo-explainer-agent "$@"
