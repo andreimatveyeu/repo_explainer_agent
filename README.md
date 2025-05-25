@@ -4,7 +4,7 @@
 
 The Repo Explainer Agent is a tool designed to understand and explain code repositories. It analyzes the repository structure, code, and documentation to provide insights and answer user queries about the codebase.
 
-<img src="repo_explainer_graph.png" alt="Repo Explainer Graph" width="300" align="left" style="margin-right: 20px; margin-bottom: 10px;" />
+<img src="repo_explainer_graph.png" alt="Repo Explainer Graph" width="300" align="right" style="margin-right: 30px; margin-bottom: 30px;" />
 
 ## How it Works: The Agent's Flow
 
