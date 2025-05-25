@@ -142,6 +142,10 @@ def build_graph() -> StateGraph:
     
     # Compile the graph
     app = graph_builder.compile()
+
+    # Add a way to get the raw graph for visualization
+    app.get_raw_graph = lambda: graph_builder
+
     return app
 
 if __name__ == '__main__':
@@ -242,13 +246,63 @@ if __name__ == '__main__':
     # General cleanup for cloned repositories (if any were cloned by initialize_repository_node)
     # This might be better handled by the initialize_repository_node itself or a dedicated cleanup function
     # if the script is intended to be used as a library. For a CLI tool, this cleanup is reasonable.
-    cloned_repos_dir = "./cloned_repositories" 
+    cloned_repos_dir = "./cloned_repositories"
     if os.path.exists(cloned_repos_dir):
         # Add a check to ensure we are not deleting something unintended if the script is run from a different context
         # For now, assuming this is run from the project root where "./cloned_repositories" is expected.
         print(f"Cleaning up cloned repositories directory: {cloned_repos_dir}")
         # shutil.rmtree(cloned_repos_dir) # Temporarily commenting out to avoid accidental deletion during testing
         # print(f"Note: Automatic cleanup of {cloned_repos_dir} is currently commented out in the script.")
+
+    # --- Generate Graph Visualization ---
+    print("\n--- Generating Graph Visualization ---")
+    compiled_app_for_viz = build_graph() # Build it fresh or use 'app' if state doesn't matter for viz
+    raw_graph = compiled_app_for_viz.get_raw_graph() # Get the StateGraph instance
+
+    # Ensure the output directory exists
+    output_dir = "./" # Define a directory for images
+    os.makedirs(output_dir, exist_ok=True)
+    image_path = os.path.join(output_dir, "repo_explainer_graph.png")
+
+    try:
+        # For LangGraph, the StateGraph object itself doesn't have a direct draw method.
+        # We need to get the compiled graph and then draw it.
+        # The `get_graph()` method on a compiled `Pregel` instance returns a `Graph` object
+        # which has drawing capabilities.
+        # However, `app.get_graph()` is the standard way.
+        # Let's assume `app` is the compiled graph (Pregel instance)
+        
+        # The `draw_mermaid_png` method is on the `Graph` object obtained from `app.get_graph()`
+        # not directly on the `StateGraph` (graph_builder) or the compiled `Pregel` (app).
+        
+        # To get the visualizable graph object:
+        visualizable_graph = compiled_app_for_viz.get_graph()
+        
+        # Now, draw the PNG
+        png_bytes = visualizable_graph.draw_mermaid_png()
+        with open(image_path, "wb") as f:
+            f.write(png_bytes)
+        print(f"Graph visualization saved to: {image_path}")
+
+        # Attempt to set ownership based on environment variables
+        try:
+            host_uid_str = os.getenv("HOST_UID")
+            host_gid_str = os.getenv("HOST_GID")
+            if host_uid_str is not None and host_gid_str is not None:
+                host_uid = int(host_uid_str)
+                host_gid = int(host_gid_str)
+                os.chown(image_path, host_uid, host_gid)
+                print(f"Changed ownership of {image_path} to UID={host_uid}, GID={host_gid}")
+            else:
+                print("HOST_UID or HOST_GID environment variables not set. Skipping chown.")
+        except Exception as chown_e:
+            print(f"Error changing ownership of {image_path}: {chown_e}")
+            print("Ensure the script has permissions to chown, and HOST_UID/HOST_GID are valid integers.")
+
+    except Exception as e:
+        print(f"Error generating graph visualization: {e}")
+        print("Make sure you have playwright and its browser dependencies installed for PNG export.")
+        print("Run: `pip install langgraph[draw]` and `playwright install`")
 
 
     print("\nGraph processing for the provided query completed.")

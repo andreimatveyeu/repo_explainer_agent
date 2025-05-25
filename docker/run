@@ -21,4 +21,8 @@ docker run -it --rm --network=host \
   -e GOOGLE_AISTUDIO_API_KEY \
   -e OLLAMA_URL \
   -e OLLAMA_MODEL \
+  -e HOST_UID="$(id -u)" \
+  -e HOST_GID="$(id -g)" \
+  -v "$(pwd):/cwd" \
+  -w /cwd \
   repo-explainer-agent "$@"

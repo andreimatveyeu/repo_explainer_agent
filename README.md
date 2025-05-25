@@ -4,6 +4,8 @@
 
 The Repo Explainer Agent is a tool designed to understand and explain code repositories. It analyzes the repository structure, code, and documentation to provide insights and answer user queries about the codebase.
 
+<img src="repo_explainer_graph.png" alt="Repo Explainer Graph" width="300" align="left" style="margin-right: 20px; margin-bottom: 10px;" />
+
 ## How it Works: The Agent's Flow
 
 The Repo Explainer Agent processes a code repository and user queries through a sequence of operations orchestrated by `src/graph.py`. The flow can be broadly divided into initial analysis and query-driven analysis:

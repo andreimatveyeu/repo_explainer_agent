@@ -1,5 +1,8 @@
 import os
 import subprocess
+import tempfile
+import shutil
+import atexit
 from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
@@ -30,59 +33,29 @@ def initialize_repository(state: RepoExplainerState) -> RepoExplainerState:
         # Basic git clone functionality.
         # For a production system, use a library like GitPython or handle errors more robustly.
         try:
-            # Define a base directory for clones, e.g., './cloned_repositories'
-            # This should be configurable.
-            clone_base_dir = os.path.abspath(os.path.join(os.getcwd(), "cloned_repositories"))
-            os.makedirs(clone_base_dir, exist_ok=True)
+            # Create a unique temporary directory for this clone session.
+            # The actual repo will be cloned as a subdirectory within this temp_dir.
+            # tempfile.mkdtemp creates a directory with a unique name.
+            temp_parent_dir = tempfile.mkdtemp(prefix="repo_explainer_clone_")
             
+            # Register a cleanup function for the parent temporary directory.
+            # This ensures the entire directory created by mkdtemp (and its contents) 
+            # is removed when the Python interpreter exits.
+            # ignore_errors=True helps prevent cleanup issues if, for example, a file is locked.
+            atexit.register(shutil.rmtree, temp_parent_dir, ignore_errors=True)
+            print(f"Created temporary directory for clone: {temp_parent_dir}. It will be cleaned up on exit.")
+
             repo_name = get_repo_name_from_url(repo_url)
-            target_clone_path = os.path.join(clone_base_dir, repo_name)
+            # The repository will be cloned into a subdirectory named `repo_name` inside `temp_parent_dir`.
+            target_clone_path = os.path.join(temp_parent_dir, repo_name)
 
-            # If a repo_url is provided, we prioritize cloning it.
-            # A more robust solution might involve removing the old directory if it exists and isn't the correct repo,
-            # or implementing a git pull strategy if it is the correct repo.
-            # For now, if the directory exists, we'll assume it's potentially the target repo and could be used or updated.
-            # If it doesn't exist, we clone.
-            if os.path.isdir(target_clone_path):
-                # Consider adding logic to verify if this directory is indeed the repo from repo_url
-                # or if it needs to be updated (e.g., git pull).
-                # For this fix, we'll assume if it exists, it might be stale but we'll proceed.
-                # A cleaner approach for "always clone if URL is given" might be to remove target_clone_path first.
-                # However, to minimize changes, we'll keep the "use if exists" but ensure cloning happens if not.
-                print(f"Directory {target_clone_path} exists. Checking if it's the intended repo or needs cloning.")
-                # For simplicity in this fix, if we want to ensure the URL is cloned,
-                # we should ideally clone to a fresh path or ensure the existing one is correct/updated.
-                # Let's refine to: if it exists, print a message but still treat it as the path.
-                # If it doesn't exist, clone. This matches original behavior if path existed, but now repo_url is primary.
-                # A more aggressive strategy would be to remove and re-clone, or `git pull`.
-                # The original code for existing path:
-                # print(f"Repository already cloned at: {target_clone_path}. Using existing.")
-                # Let's stick to a similar behavior for now if it exists.
-                if not os.path.exists(os.path.join(target_clone_path, ".git")): # Basic check if it's a git repo
-                    print(f"Directory {target_clone_path} exists but is not a git repository or is incomplete. Attempting to clone...")
-                    # Potentially remove target_clone_path here if it's not a valid git repo to avoid clone errors.
-                    # import shutil
-                    # shutil.rmtree(target_clone_path) # Be cautious with this
-                    # os.makedirs(target_clone_path) # Recreate after delete if git clone expects parent dir
-                    result = subprocess.run(
-                        ["git", "clone", repo_url, target_clone_path], 
-                        check=True, capture_output=True, text=True
-                    )
-                    print(f"Clone successful. Output:\n{result.stdout}")
-                else:
-                    print(f"Repository already cloned at: {target_clone_path}. Using existing. Consider 'git pull' for updates.")
-                    # Optionally, could add logic here to pull latest changes:
-                    # print("Attempting to pull latest changes...")
-                    # subprocess.run(["git", "pull"], cwd=target_clone_path, check=True, capture_output=True, text=True)
-
-            else:
-                print(f"Cloning repository from {repo_url} to {target_clone_path}...")
-                result = subprocess.run(
-                    ["git", "clone", repo_url, target_clone_path], 
-                    check=True, capture_output=True, text=True
-                )
-                print(f"Clone successful. Output:\n{result.stdout}")
-            
+            print(f"Cloning repository from {repo_url} into temporary directory at {target_clone_path}...")
+            # The `git clone` command will create the `repo_name` directory within `temp_parent_dir`.
+            result = subprocess.run(
+                ["git", "clone", repo_url, target_clone_path], 
+                check=True, capture_output=True, text=True
+            )
+            print(f"Clone successful. Output:\n{result.stdout}")
             updated_state["local_repo_path"] = target_clone_path
 
         except subprocess.CalledProcessError as e:
@@ -171,10 +144,8 @@ if __name__ == '__main__':
         import shutil
         shutil.rmtree("./temp_test_repo")
     
-    # Cleanup cloned_repositories directory if you want a clean slate for each test run
-    # cloned_base = os.path.abspath(os.path.join(os.getcwd(), "cloned_repositories"))
-    # if os.path.exists(cloned_base):
-    #     print(f"Cleaning up {cloned_base}...")
-    #     shutil.rmtree(cloned_base)
+    # Temporary directories used for cloning (if any test_repo_url was used) 
+    # will be cleaned up automatically via the atexit handler registered in the function.
+    # No manual cleanup of a "cloned_repositories" directory is needed here anymore.
 
     print("\ninitialize_repository node tests completed.")
