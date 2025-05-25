@@ -7,6 +7,7 @@ from .initial_high_level_summarizer_node import initial_high_level_summarizer
 from .user_query_parser_node import basic_user_query_parser
 from .file_explainer_node import file_explainer_node
 from .response_generator_node import response_generator_node
+from .architecture_analyzer_node import architecture_analyzer_node
 
 __all__ = [
     "initialize_repository",
@@ -16,4 +17,5 @@ __all__ = [
     "basic_user_query_parser",
     "file_explainer_node",
     "response_generator_node",
+    "architecture_analyzer_node",
 ]

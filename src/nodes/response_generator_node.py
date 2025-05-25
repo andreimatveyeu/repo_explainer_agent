@@ -32,6 +32,19 @@ def response_generator_node(state: RepoExplainerState) -> RepoExplainerState:
     elif parsed_query_intent == "explain_repository_overview" and overall_summary:
         print("Intent is repository overview, using overall_summary.")
         final_response_text = overall_summary
+    elif parsed_query_intent == "explain_repository_architecture":
+        print("Intent is repository architecture.")
+        if generated_explanation: # Check if a specific architectural explanation was already generated
+            print("Using generated_explanation for architecture.")
+            final_response_text = generated_explanation
+        elif overall_summary: # Fallback to overall_summary if no specific architectural explanation
+            print("No specific architectural explanation, using overall_summary with a note for architecture.")
+            # This indicates that a more detailed analysis node for architecture might be missing or did not run.
+            final_response_text = f"A detailed architectural analysis is intended. For now, here's the overall summary which provides some context:\n{overall_summary}"
+        # If neither generated_explanation nor overall_summary is available here,
+        # it will fall through to the later 'elif generated_explanation:' 
+        # (which would be None) and then 'elif overall_summary:' (which would be None),
+        # eventually hitting the final 'else' block.
     elif generated_explanation:
         print("Using generated_explanation for response.")
         final_response_text = generated_explanation

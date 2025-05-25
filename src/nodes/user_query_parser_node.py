@@ -8,10 +8,11 @@ from src.utils.llm_utils import call_llm_for_structured_output, call_llm_for_sum
 # Define a simple set of intents for the basic parser
 # In a more advanced system, these could be more dynamic or complex.
 SUPPORTED_INTENTS = [
-    "explain_file", 
-    "explain_repository_overview", # General question about the repo
-    "find_code_entity", # E.g. "where is function X defined?"
-    "unclear_intent" # Fallback
+    "explain_file",
+    "explain_repository_overview",  # General question about the repo
+    "explain_repository_architecture", # Detailed question about repo structure, components, architecture
+    "find_code_entity",  # E.g. "where is function X defined?"
+    "unclear_intent"  # Fallback
 ]
 
 def basic_user_query_parser(state: RepoExplainerState) -> RepoExplainerState:
@@ -71,9 +72,12 @@ def basic_user_query_parser(state: RepoExplainerState) -> RepoExplainerState:
     prompt = (
         f"You are an AI assistant helping to understand user queries about a software repository. "
         f"The user's query is: \"{user_query}\"\n\n"
-        f"Based on this query and the provided context about the repository, determine the user's primary intent "
-        f"and identify any specific files or code entities (functions, classes) they are referring to. "
+        f"Based on this query and the provided context about the repository, determine the user's primary intent. "
         f"Supported intents are: {', '.join(SUPPORTED_INTENTS)}.\n"
+        f"- Use 'explain_repository_overview' for general, high-level questions about the repository (e.g., 'What is this repo about?').\n"
+        f"- Use 'explain_repository_architecture' for questions asking for a more detailed explanation of the repository's structure, components, architecture, or how parts work together (e.g., 'Explain the architecture', 'How are the components organized?').\n"
+        f"- Use 'explain_file' if the query is specifically about a single file (e.g., 'Explain src/main.py'). Identify the file path.\n"
+        f"- Use 'find_code_entity' if the query is about locating a specific function or class (e.g., 'Where is MyClass defined?'). Identify its name.\n"
         f"If the query is about a specific file, identify the file path. "
         f"If it's about a specific function or class, identify its name and, if possible, the file it might be in."
     )
@@ -109,15 +113,21 @@ def basic_user_query_parser(state: RepoExplainerState) -> RepoExplainerState:
     llm_response_str = call_llm_for_summary(
         detailed_prompt_for_json_string,
         context_chunks=context_chunks,
-        max_tokens=150, # Shorter response expected for this
+        max_tokens=500, 
         temperature=0.1
     )
 
-    if llm_response_str:
+    if llm_response_str and llm_response_str.strip():
+        cleaned_llm_response_str = llm_response_str.strip()
+        
+        # Attempt to remove common markdown code fences
+        if cleaned_llm_response_str.startswith("```json") and cleaned_llm_response_str.endswith("```"):
+            cleaned_llm_response_str = cleaned_llm_response_str[len("```json"):-len("```")].strip()
+        elif cleaned_llm_response_str.startswith("```") and cleaned_llm_response_str.endswith("```"):
+            cleaned_llm_response_str = cleaned_llm_response_str[len("```"):-len("```")].strip()
+
         try:
-            # The placeholder LLM for "understand the user's intent" already returns a JSON-like string.
-            # If it were more free-form, more robust parsing/extraction would be needed here.
-            parsed_llm_output = json.loads(llm_response_str)
+            parsed_llm_output = json.loads(cleaned_llm_response_str)
             
             intent = parsed_llm_output.get("intent", "unclear_intent")
             if intent not in SUPPORTED_INTENTS:
@@ -157,7 +167,7 @@ def basic_user_query_parser(state: RepoExplainerState) -> RepoExplainerState:
             print(f"Parsed query: Intent='{intent}', File='{target_file}', Entity='{target_entity_name}', Target IDs='{updated_state['target_entity_ids']}'")
 
         except json.JSONDecodeError as e:
-            message = f"Failed to parse LLM response for query understanding. Error: {e}. Response: {llm_response_str}"
+            message = f"Failed to parse LLM response for query understanding. Error: {e}. Original Response: '{llm_response_str}'. Cleaned Response: '{cleaned_llm_response_str}'"
             print(f"Error: {message}")
             updated_state["error_message"] = message
         except Exception as e:

@@ -26,19 +26,7 @@ def initialize_repository(state: RepoExplainerState) -> RepoExplainerState:
     local_repo_path: Optional[str] = state.get("local_repo_path")
     updated_state: Dict[str, Any] = {}
 
-    if local_repo_path:
-        if os.path.isdir(local_repo_path):
-            print(f"Using existing local repository path: {local_repo_path}")
-            updated_state["local_repo_path"] = os.path.abspath(local_repo_path)
-            # We might want to ensure it's a git repo or pull latest here in a more advanced version
-        else:
-            message = f"Provided local_repo_path '{local_repo_path}' is not a valid directory."
-            print(f"Error: {message}")
-            updated_state["error_message"] = message
-            # Decide if we should clear local_repo_path or leave it as is (errored)
-            # updated_state["local_repo_path"] = None 
-            return {**state, **updated_state} # Return early on error
-    elif repo_url:
+    if repo_url:
         # Basic git clone functionality.
         # For a production system, use a library like GitPython or handle errors more robustly.
         try:
@@ -50,16 +38,45 @@ def initialize_repository(state: RepoExplainerState) -> RepoExplainerState:
             repo_name = get_repo_name_from_url(repo_url)
             target_clone_path = os.path.join(clone_base_dir, repo_name)
 
+            # If a repo_url is provided, we prioritize cloning it.
+            # A more robust solution might involve removing the old directory if it exists and isn't the correct repo,
+            # or implementing a git pull strategy if it is the correct repo.
+            # For now, if the directory exists, we'll assume it's potentially the target repo and could be used or updated.
+            # If it doesn't exist, we clone.
             if os.path.isdir(target_clone_path):
-                print(f"Repository already cloned at: {target_clone_path}. Using existing.")
-                # Optionally, could add logic here to pull latest changes:
-                # print("Attempting to pull latest changes...")
-                # subprocess.run(["git", "pull"], cwd=target_clone_path, check=True, capture_output=True, text=True)
+                # Consider adding logic to verify if this directory is indeed the repo from repo_url
+                # or if it needs to be updated (e.g., git pull).
+                # For this fix, we'll assume if it exists, it might be stale but we'll proceed.
+                # A cleaner approach for "always clone if URL is given" might be to remove target_clone_path first.
+                # However, to minimize changes, we'll keep the "use if exists" but ensure cloning happens if not.
+                print(f"Directory {target_clone_path} exists. Checking if it's the intended repo or needs cloning.")
+                # For simplicity in this fix, if we want to ensure the URL is cloned,
+                # we should ideally clone to a fresh path or ensure the existing one is correct/updated.
+                # Let's refine to: if it exists, print a message but still treat it as the path.
+                # If it doesn't exist, clone. This matches original behavior if path existed, but now repo_url is primary.
+                # A more aggressive strategy would be to remove and re-clone, or `git pull`.
+                # The original code for existing path:
+                # print(f"Repository already cloned at: {target_clone_path}. Using existing.")
+                # Let's stick to a similar behavior for now if it exists.
+                if not os.path.exists(os.path.join(target_clone_path, ".git")): # Basic check if it's a git repo
+                    print(f"Directory {target_clone_path} exists but is not a git repository or is incomplete. Attempting to clone...")
+                    # Potentially remove target_clone_path here if it's not a valid git repo to avoid clone errors.
+                    # import shutil
+                    # shutil.rmtree(target_clone_path) # Be cautious with this
+                    # os.makedirs(target_clone_path) # Recreate after delete if git clone expects parent dir
+                    result = subprocess.run(
+                        ["git", "clone", repo_url, target_clone_path], 
+                        check=True, capture_output=True, text=True
+                    )
+                    print(f"Clone successful. Output:\n{result.stdout}")
+                else:
+                    print(f"Repository already cloned at: {target_clone_path}. Using existing. Consider 'git pull' for updates.")
+                    # Optionally, could add logic here to pull latest changes:
+                    # print("Attempting to pull latest changes...")
+                    # subprocess.run(["git", "pull"], cwd=target_clone_path, check=True, capture_output=True, text=True)
+
             else:
                 print(f"Cloning repository from {repo_url} to {target_clone_path}...")
-                # Using basic subprocess.run for git clone.
-                # Ensure git is installed and in PATH.
-                # Add --depth 1 for a shallow clone if full history isn't immediately needed
                 result = subprocess.run(
                     ["git", "clone", repo_url, target_clone_path], 
                     check=True, capture_output=True, text=True
@@ -72,19 +89,28 @@ def initialize_repository(state: RepoExplainerState) -> RepoExplainerState:
             message = f"Failed to clone repository from {repo_url}. Error: {e.stderr}"
             print(f"Error: {message}")
             updated_state["error_message"] = message
-            # updated_state["local_repo_path"] = None
             return {**state, **updated_state} # Return early on error
         except Exception as e:
-            message = f"An unexpected error occurred during repository initialization: {str(e)}"
+            message = f"An unexpected error occurred during repository cloning: {str(e)}"
             print(f"Error: {message}")
             updated_state["error_message"] = message
-            # updated_state["local_repo_path"] = None
+            return {**state, **updated_state} # Return early on error
+    elif local_repo_path:
+        # This block is now executed only if repo_url was NOT provided.
+        if os.path.isdir(local_repo_path):
+            print(f"Using existing local repository path (repo_url not provided): {local_repo_path}")
+            updated_state["local_repo_path"] = os.path.abspath(local_repo_path)
+            # We might want to ensure it's a git repo or pull latest here in a more advanced version
+        else:
+            message = f"Provided local_repo_path '{local_repo_path}' is not a valid directory (repo_url not provided)."
+            print(f"Error: {message}")
+            updated_state["error_message"] = message
             return {**state, **updated_state} # Return early on error
     else:
+        # Neither repo_url nor local_repo_path provided.
         message = "Neither repo_url nor local_repo_path provided in the state."
         print(f"Error: {message}")
         updated_state["error_message"] = message
-        # updated_state["local_repo_path"] = None
         return {**state, **updated_state}
 
     # Clear any previous error message if successful

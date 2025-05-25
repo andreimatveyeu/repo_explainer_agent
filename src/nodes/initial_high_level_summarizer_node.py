@@ -1,3 +1,4 @@
+import os
 from typing import Dict, Any, Optional, List
 
 from src.core.state import RepoExplainerState
@@ -100,7 +101,7 @@ def initial_high_level_summarizer(state: RepoExplainerState) -> RepoExplainerSta
         "Generate a summary that would be helpful for someone trying to quickly understand what this repository is about."
     )
 
-    summary = call_llm_for_summary(prompt, context_chunks=context_chunks, max_tokens=300)
+    summary = call_llm_for_summary(prompt, context_chunks=context_chunks, max_tokens=1000)
 
     if summary:
         print(f"Generated overall summary: {summary[:200]}...")

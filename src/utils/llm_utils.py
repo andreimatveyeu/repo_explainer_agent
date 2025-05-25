@@ -1,17 +1,21 @@
+import os
+import json
 from typing import Dict, List, Any, Optional
+import google.generativeai as genai
 
-# Placeholder for actual LLM client and API calls
-# In a real implementation, this would use libraries like openai, anthropic, or huggingface_hub.
+# Configure the generative AI model
+# The API key is expected to be set as an environment variable GOOGLE_AISTUDIO_API_KEY
+genai.configure(api_key=os.environ.get("GOOGLE_AISTUDIO_API_KEY"))
 
 def call_llm_for_summary(
     prompt: str,
     context_chunks: Optional[List[str]] = None,
     max_tokens: int = 500,
     temperature: float = 0.3,
-    # model_name: str = "gpt-3.5-turbo" # Or your preferred model
+    model_name: str = "gemini-2.0-flash-001"
 ) -> Optional[str]:
     """
-    Placeholder function to simulate calling an LLM for summarization or explanation.
+    Calls the Google Gemini LLM for summarization or explanation.
 
     Args:
         prompt: The main prompt for the LLM.
@@ -27,87 +31,143 @@ def call_llm_for_summary(
     if context_chunks:
         full_prompt += "\n\nRelevant Context:\n" + "\n---\n".join(context_chunks)
 
-    print(f"\n--- Simulating LLM Call ---")
-    print(f"Model: placeholder_llm_model (e.g., gpt-3.5-turbo)")
-    print(f"Temperature: {temperature}, Max Tokens: {max_tokens}")
-    print(f"Prompt (first 500 chars):\n{full_prompt[:500]}...")
-    if len(full_prompt) > 500:
-        print("...(prompt truncated for display)...")
-    
-    # Simulate LLM response based on prompt type for basic testing
-    if "overall summary" in prompt.lower() or "high-level summary" in prompt.lower():
-        simulated_response = (
-            "This is a simulated high-level summary. The repository appears to be a "
-            "Python project focusing on data processing and utility functions. Key modules "
-            "include 'main.py' and 'utils.py'. Documentation in 'README.md' provides "
-            "an overview of its purpose and setup."
+    try:
+        model = genai.GenerativeModel(model_name)
+        config = genai.types.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=temperature,
         )
-    elif "explain the purpose of the file" in prompt.lower():
-        simulated_response = (
-            "This is a simulated file explanation. The file `example.py` defines a class `ExampleClass` "
-            "and a function `example_function`. It seems to handle core logic related to user authentication."
-        )
-    elif "understand the user's intent" in prompt.lower(): # For user_query_parser
-        simulated_response = (
-            '{"intent": "explain_file", "target_entity": "example.py", "confidence": 0.85}' # JSON-like string
-        )
-    else:
-        simulated_response = (
-            "This is a generic simulated LLM response. The request was to process the provided "
-            "information and generate a relevant textual output."
-        )
-    
-    print(f"Simulated LLM Response:\n{simulated_response}\n--- End LLM Call ---")
-    
-    # In a real scenario, you would handle API calls, retries, errors, etc.
-    # For example:
-    # try:
-    #     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-    #     response = client.chat.completions.create(
-    #         model=model_name,
-    #         messages=[{"role": "user", "content": full_prompt}],
-    #         max_tokens=max_tokens,
-    #         temperature=temperature
-    #     )
-    #     return response.choices[0].message.content
-    # except Exception as e:
-    #     print(f"Error calling LLM: {e}")
-    #     return None
-        
-    return simulated_response
+        # print(f"--- LLM Call (call_llm_for_summary) ---")
+        # print(f"Model: {model_name}")
+        # print(f"Prompt (first 100 chars): {full_prompt[:100]}...")
+        # print(f"GenerationConfig: {config}")
 
-# Example of a more specific LLM call for structured output (e.g., for intent parsing)
+        response = model.generate_content(
+            full_prompt,
+            generation_config=config,
+        )
+        
+        # Check finish reason and parts before accessing response.text
+        if response.candidates and \
+           response.candidates[0].content and \
+           response.candidates[0].content.parts:
+            
+            finish_reason = response.candidates[0].finish_reason
+            # Compare with the STOP member of the actual finish_reason enum type
+            if finish_reason != type(finish_reason).STOP:
+                 print(f"LLM generation for summary finished with reason: {finish_reason.name} ({finish_reason.value}). Response might be incomplete or missing.")
+            
+            # It's generally safer to access parts directly if needed,
+            # but response.text should work if parts[0] is text.
+            # If finish_reason was not STOP, .text might still be empty or partial.
+            return response.text 
+        else:
+            finish_reason_name = "UNKNOWN"
+            finish_reason_value = -1
+            # prompt_feedback_info = "N/A" # Removed
+            # candidate_safety_ratings_info = "N/A" # Removed
+
+            if response.candidates and response.candidates[0].finish_reason:
+                finish_reason_name = response.candidates[0].finish_reason.name
+                finish_reason_value = response.candidates[0].finish_reason.value
+            
+            # if hasattr(response, 'prompt_feedback') and response.prompt_feedback: # Removed
+            #     prompt_feedback_info = f"Block Reason: {response.prompt_feedback.block_reason}, " \
+            #                            f"Safety Ratings: {response.prompt_feedback.safety_ratings}" # Removed
+            
+            # if response.candidates and hasattr(response.candidates[0], 'safety_ratings') and response.candidates[0].safety_ratings: # Removed
+            #     candidate_safety_ratings_info = str(response.candidates[0].safety_ratings) # Removed
+
+            print(f"Error calling LLM for summary: No valid content parts in response. Finish reason: {finish_reason_name} ({finish_reason_value})")
+            # print(f"Prompt Feedback (summary): {prompt_feedback_info}") # Removed
+            # print(f"Candidate Safety Ratings (summary): {candidate_safety_ratings_info}") # Removed
+            # print(f"Full LLM response object for debugging (summary): {response}") # Re-commented
+            return None
+            
+    except Exception as e:
+        # This catches other errors, e.g., API connection issues, or if response.text itself errors
+        # despite the checks (though less likely with the checks).
+        print(f"Error calling LLM for summary: {e}")
+        # print(f"Full LLM response object at time of exception: {response if 'response' in locals() else 'Response object not available'}")
+        return None
+
 def call_llm_for_structured_output(
     prompt: str,
-    output_format_description: str, # e.g., "Return a JSON object with keys 'intent' and 'entities'."
+    output_format_description: str,
     context_chunks: Optional[List[str]] = None,
     max_tokens: int = 200,
     temperature: float = 0.1,
+    model_name: str = "gemini-2.0-flash-001"
 ) -> Optional[Dict[str, Any]]:
     """
-    Placeholder for an LLM call expected to return structured data (e.g., JSON).
+    Calls the Google Gemini LLM for structured data (e.g., JSON) output.
     """
     full_prompt = prompt
     if context_chunks:
         full_prompt += "\n\nRelevant Context:\n" + "\n---\n".join(context_chunks)
     full_prompt += f"\n\nOutput Format Instructions:\n{output_format_description}"
+    
+    response_text_for_json_parsing = "" # Initialize for logging in case of early exit
 
-    print(f"\n--- Simulating LLM Call (Structured Output) ---")
-    print(f"Prompt (first 500 chars):\n{full_prompt[:500]}...")
-    
-    # Simulate a JSON response for intent parsing
-    if "user's intent" in prompt.lower() and "json" in output_format_description.lower():
-        simulated_json_response = {
-            "intent": "explain_file",
-            "target_entities": ["src/main.py"],
-            "parameters": {"detail_level": "high"},
-            "confidence_score": 0.9
-        }
-        import json
-        print(f"Simulated LLM JSON Response:\n{json.dumps(simulated_json_response, indent=2)}")
-        print("--- End LLM Call ---")
-        return simulated_json_response
-    
-    print("Warning: No specific simulation for this structured output prompt. Returning None.")
-    print("--- End LLM Call ---")
-    return None
+    try:
+        model = genai.GenerativeModel(model_name)
+        config = genai.types.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+            # Consider adding response_mime_type="application/json" if the model/API supports it
+            # for more reliable JSON output, though this might require specific model versions.
+        )
+        # print(f"--- LLM Call (call_llm_for_structured_output) ---")
+        # print(f"Model: {model_name}")
+        # print(f"Prompt (first 100 chars): {full_prompt[:100]}...")
+        # print(f"GenerationConfig: {config}")
+        
+        response = model.generate_content(
+            full_prompt,
+            generation_config=config,
+        )
+
+        if response.candidates and \
+           response.candidates[0].content and \
+           response.candidates[0].content.parts:
+            
+            finish_reason = response.candidates[0].finish_reason
+            # Compare with the STOP member of the actual finish_reason enum type
+            if finish_reason != type(finish_reason).STOP:
+                 print(f"LLM generation for structured output finished with reason: {finish_reason.name} ({finish_reason.value}). Response might be incomplete or malformed.")
+
+            response_text_for_json_parsing = response.text # Get text from the first part
+            
+            # Attempt to parse JSON
+            return json.loads(response_text_for_json_parsing)
+        else:
+            finish_reason_name = "UNKNOWN"
+            finish_reason_value = -1
+            # prompt_feedback_info = "N/A" # Removed
+            # candidate_safety_ratings_info = "N/A" # Removed
+
+            if response.candidates and response.candidates[0].finish_reason:
+                finish_reason_name = response.candidates[0].finish_reason.name
+                finish_reason_value = response.candidates[0].finish_reason.value
+
+            # if hasattr(response, 'prompt_feedback') and response.prompt_feedback: # Removed
+            #     prompt_feedback_info = f"Block Reason: {response.prompt_feedback.block_reason}, " \
+            #                            f"Safety Ratings: {response.prompt_feedback.safety_ratings}" # Removed
+
+            # if response.candidates and hasattr(response.candidates[0], 'safety_ratings') and response.candidates[0].safety_ratings: # Removed
+            #     candidate_safety_ratings_info = str(response.candidates[0].safety_ratings) # Removed
+
+            print(f"Error calling LLM for structured output: No valid content parts in response. Finish reason: {finish_reason_name} ({finish_reason_value})")
+            # print(f"Prompt Feedback (structured): {prompt_feedback_info}") # Removed
+            # print(f"Candidate Safety Ratings (structured): {candidate_safety_ratings_info}") # Removed
+            # print(f"Full LLM response object for debugging (structured): {response}") # Re-commented
+            return None
+            
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON from LLM response: {e}")
+        print(f"LLM response text that failed to parse: '{response_text_for_json_parsing}'")
+        return None
+    except Exception as e: # Catches other errors like API issues or unexpected response structure
+        print(f"Error calling LLM for structured output: {e}")
+        # print(f"Full LLM response object at time of exception: {response if 'response' in locals() else 'Response object not available'}")
+        return None
